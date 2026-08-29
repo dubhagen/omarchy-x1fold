@@ -25,7 +25,6 @@ Item {
   property string pendingCommand: ""
   property var screensaverWindows: ({})
   property bool barHiddenByScreensaver: false
-  property bool barHiddenBeforeScreensaver: false
   readonly property int reservedLogical: {
     if (!clamshell)
       return 0
@@ -162,24 +161,60 @@ Item {
     return n > 0
   }
 
-  function hideBarForScreensaver() {
-    if (!root.clamshell || !root.shell || !root.shell.bar)
+  function eachBarPanel(fn) {
+    if (!root.shell || !root.shell.bar)
       return
-    if (!("barHidden" in root.shell.bar))
-      return
-    if (!root.barHiddenByScreensaver) {
-      root.barHiddenBeforeScreensaver = root.shell.bar.barHidden === true
-      root.barHiddenByScreensaver = true
+    var seen = []
+    function visit(node, depth) {
+      if (!node || depth > 8 || seen.length > 40)
+        return
+      for (var s = 0; s < seen.length; s++)
+        if (seen[s] === node)
+          return
+      seen.push(node)
+      if (root.layerNamespace(node) === "omarchy-bar")
+        fn(node)
+      var lists = []
+      try { if (node.children) lists.push(node.children) } catch (e) {}
+      try { if (node.data) lists.push(node.data) } catch (e) {}
+      for (var li = 0; li < lists.length; li++) {
+        var list = lists[li]
+        if (!list)
+          continue
+        var n = list.length
+        for (var i = 0; i < n; i++)
+          visit(list[i], depth + 1)
+      }
     }
-    root.shell.bar.barHidden = true
+    visit(root.shell.bar, 0)
+  }
+
+  function hideBarForScreensaver() {
+    if (!root.clamshell)
+      return
+    // Do not set barHidden: that drops the exclusive zone and reflows tiled
+    // windows. Park the bar surface off-screen and keep Auto exclusive zone.
+    root.barHiddenByScreensaver = true
+    root.eachBarPanel(function(panel) {
+      if (panel.opacity !== undefined)
+        panel.opacity = 0
+      if (panel.margins !== undefined) {
+        var h = Math.round(panel.implicitHeight || panel.height || 26)
+        panel.margins = { left: 0, right: 0, top: -h, bottom: 0 }
+      }
+    })
   }
 
   function restoreBarAfterScreensaver() {
     if (!root.barHiddenByScreensaver)
       return
     root.barHiddenByScreensaver = false
-    if (root.shell && root.shell.bar && "barHidden" in root.shell.bar)
-      root.shell.bar.barHidden = root.barHiddenBeforeScreensaver
+    root.eachBarPanel(function(panel) {
+      if (panel.opacity !== undefined)
+        panel.opacity = 1
+      if (panel.margins !== undefined)
+        panel.margins = { left: 0, right: 0, top: 0, bottom: 0 }
+    })
   }
 
   function layerNamespace(item) {
@@ -336,7 +371,6 @@ Item {
       next[String(parts[0] || "")] = true
       root.screensaverWindows = next
       if (root.clamshell) {
-        root.hideBarForScreensaver()
         ssProc.command = [root.script, "constrain-screensaver", String(parts[0] || "")]
         ssProc.running = true
         ssRetry.left = 8
@@ -348,8 +382,11 @@ Item {
         var cleared = Object.assign({}, root.screensaverWindows)
         delete cleared[address]
         root.screensaverWindows = cleared
-        if (!root.screensaverOpen())
+        if (!root.screensaverOpen()) {
           root.restoreBarAfterScreensaver()
+          ssProc.command = [root.script, "cursor", "show"]
+          ssProc.running = true
+        }
         restoreTimer.restart()
       }
     } else if (name === "monitoradded" || name === "configreloaded") {

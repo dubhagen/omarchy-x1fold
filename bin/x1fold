@@ -14,6 +14,7 @@ Commands:
   apply
   constrain-fullscreen [address]
   constrain-screensaver [address]
+  cursor hide|show
   daemon
 """
 
@@ -317,66 +318,77 @@ def is_screensaver(client: dict) -> bool:
     return str(client.get("class") or "") == SCREENSAVER_CLASS
 
 
-def screensaver_rect(mon: dict, state: dict) -> tuple[int, int, int, int]:
-    """Visible OLED half, including the bar strip; keyboard reserve excluded."""
-    transform = int(state.get("transform") or 0) % 4
-    lw, lh = logical_size(mon, transform)
-    bottom = reserved_bottom(
-        mon,
-        transform,
-        True,
-        float(state.get("cover_ratio") or 0.50),
-        int(state.get("overlap_px") or 0),
-    )
-    x = int(mon.get("x") or 0)
-    y = int(mon.get("y") or 0)
-    return x, y, lw, max(1, lh - bottom)
+CURSOR_RESTORE_PATH = STATE_DIR / "cursor-restore.json"
+
+
+def hypr_option(name: str) -> dict:
+    try:
+        out = run(["hyprctl", "getoption", name, "-j"], check=False).stdout or "{}"
+        data = json.loads(out)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, FileNotFoundError):
+        return {}
+
+
+def eval_cursor(**kwargs: object) -> None:
+    parts = []
+    if "invisible" in kwargs:
+        parts.append(f"invisible = {str(bool(kwargs['invisible'])).lower()}")
+    if "no_hardware_cursors" in kwargs:
+        parts.append(f"no_hardware_cursors = {int(kwargs['no_hardware_cursors'])}")
+    if not parts:
+        return
+    inner = ", ".join(parts)
+    try:
+        run(["hyprctl", "eval", f"hl.config({{ cursor = {{ {inner} }} }})"], check=False)
+    except FileNotFoundError:
+        pass
+
+
+def hide_cursor_for_screensaver() -> None:
+    if not CURSOR_RESTORE_PATH.exists():
+        hw = hypr_option("cursor:no_hardware_cursors")
+        CURSOR_RESTORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CURSOR_RESTORE_PATH.write_text(
+            json.dumps({"no_hardware_cursors": int(hw.get("int") or hw.get("data") or 0)})
+            + "\n"
+        )
+    eval_cursor(invisible=True, no_hardware_cursors=1)
+
+
+def restore_cursor_after_screensaver() -> None:
+    hw = 0
+    if CURSOR_RESTORE_PATH.exists():
+        try:
+            loaded = json.loads(CURSOR_RESTORE_PATH.read_text())
+            if isinstance(loaded, dict):
+                hw = int(loaded.get("no_hardware_cursors") or 0)
+        except json.JSONDecodeError:
+            pass
+        CURSOR_RESTORE_PATH.unlink(missing_ok=True)
+    eval_cursor(invisible=False, no_hardware_cursors=hw)
 
 
 def place_screensaver(client: dict, state: dict) -> bool:
-    """Borderless window filling the visible half, fake-fullscreen to the app.
+    """Keep covering fullscreen. Do not tile or resize.
 
-    Covering fullscreen (Super+F) hides the bar and gaps but uses the whole
-    OLED, so TTE centers on the fold. Maximized keeps gaps and the bar.
-    Size the window to the clamshell half first, then tell the client it is
-    fullscreen inside that window.
+    Un-fullscreening this window to size it pulled it into dwindle and
+    reflowed every other client. Covering fullscreen is Super+F: no bar,
+    no gaps, no layout change. The Overlay keyboard mask covers the lower
+    half. Re-assert cursor:invisible after map; Hyprland otherwise shows
+    the pointer on a non-game fullscreen surface.
     """
     addr = str(client.get("address") or "")
     if not addr:
         return False
-    try:
-        mon = pick_monitor(state)
-    except SystemExit:
-        return False
-    x, y, w, h = screensaver_rect(mon, state)
-    at = client.get("at") or [0, 0]
-    size = client.get("size") or [0, 0]
-    internal = int(client.get("fullscreen") or 0)
-    client_fs = int(client.get("fullscreenClient") or 0)
-    placed = (
-        bool(client.get("floating"))
-        and internal == 0
-        and client_fs == 2
-        and abs(int(at[0]) - x) <= 2
-        and abs(int(at[1]) - y) <= 2
-        and abs(int(size[0]) - w) <= 4
-        and abs(int(size[1]) - h) <= 4
-    )
-    if placed:
-        return True
     sel = window_selector(addr)
-    dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
-    if internal:
-        dispatch_fullscreen_state(addr, 0, 0)
-        dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
-    dispatch_lua(f'hl.dsp.window.move({{ x = {x}, y = {y}, window = "{sel}" }})')
-    dispatch_lua(f'hl.dsp.window.resize({{ x = {w}, y = {h}, window = "{sel}" }})')
-    if client_fs != 2:
-        dispatch_fullscreen_state(addr, 0, 2)
-        dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
-        dispatch_lua(f'hl.dsp.window.move({{ x = {x}, y = {y}, window = "{sel}" }})')
-        dispatch_lua(f'hl.dsp.window.resize({{ x = {w}, y = {h}, window = "{sel}" }})')
-    return False
+    internal = int(client.get("fullscreen") or 0)
+    if internal != 2:
+        dispatch_lua(
+            f'hl.dsp.window.fullscreen({{ mode = "fullscreen", action = "set", window = "{sel}" }})'
+        )
+    hide_cursor_for_screensaver()
+    return internal == 2
 
 
 def constrain_screensaver(state: dict, address: str | None = None) -> bool:
@@ -432,6 +444,14 @@ def cmd_constrain_fullscreen(state: dict, address: str | None = None) -> int:
 
 def cmd_constrain_screensaver(state: dict, address: str | None = None) -> int:
     constrain_screensaver(state, address)
+    return 0
+
+
+def cmd_cursor(state: dict, token: str) -> int:
+    if token in {"hide", "off", "true", "1"}:
+        hide_cursor_for_screensaver()
+    else:
+        restore_cursor_after_screensaver()
     return 0
 
 
@@ -860,6 +880,10 @@ def main(argv: list[str]) -> int:
         return cmd_constrain_fullscreen(state, args[1] if len(args) > 1 else None)
     if cmd == "constrain-screensaver":
         return cmd_constrain_screensaver(state, args[1] if len(args) > 1 else None)
+    if cmd == "cursor":
+        if len(args) < 2:
+            fail("cursor needs hide|show")
+        return cmd_cursor(state, args[1])
     if cmd == "daemon":
         return cmd_daemon(state)
     fail(f"unknown command: {cmd}\n{usage()}")
