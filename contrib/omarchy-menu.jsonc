@@ -1,0 +1,10 @@
+  "trigger.hardware.x1fold": {"icon":"󰹑","label":"X1 Fold","aliases":["fold","clamshell","orientation"]},
+  "trigger.hardware.x1fold.cycle": {"icon":"󰁑","label":"Cycle orientation","action":"x1fold rotate cycle"},
+  "trigger.hardware.x1fold.portrait": {"icon":"󰁞","label":"Portrait","checked":"x1fold status | grep -q '\"orientation\": \"portrait\"'","action":"x1fold rotate portrait"},
+  "trigger.hardware.x1fold.portrait-flip": {"icon":"󰁆","label":"Portrait flipped","action":"x1fold rotate portrait-flip"},
+  "trigger.hardware.x1fold.landscape": {"icon":"󰹑","label":"Landscape","action":"x1fold rotate landscape"},
+  "trigger.hardware.x1fold.landscape-flip": {"icon":"󰑍","label":"Landscape flipped","action":"x1fold rotate landscape-flip"},
+  "trigger.hardware.x1fold.clamshell": {"icon":"󰌌","label":"Toggle clamshell","checked":"x1fold status | grep -q '\"clamshell\": true'","action":"x1fold clamshell toggle"},
+  "trigger.hardware.x1fold.tablet": {"icon":"󰓶","label":"Full panel","action":"x1fold tablet"},
+  "trigger.hardware.x1fold.autorotate": {"icon":"󰑴","label":"Toggle auto-rotate","checked":"x1fold status | grep -q '\"autorotate\": true'","action":"x1fold autorotate toggle"},
+  "trigger.hardware.x1fold.osk": {"icon":"󰌌","label":"On-screen keyboard","checked":"x1fold status | grep -q '\"osk\": true'","action":"x1fold osk toggle"}

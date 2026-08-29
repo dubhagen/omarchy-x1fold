@@ -1,0 +1,53 @@
+#!/bin/bash
+# mkinitcpio install hook: Bluetooth HID in the initramfs so a paired
+# keyboard can type the LUKS passphrase. Adapted from mkinitcpio-bluetooth.
+
+build() {
+	local core="^root:.*|^systemd-.*"
+	local udev="^tty:.*|^uucp:.*|^kmem:.|^input:.*|^video:.*|^audio:.*|^lp:.*|^disk:.*|^optical:.*|^storage:.*|^dbus:.*"
+	local target
+	for target in /etc/{group,passwd,shadow}; do
+		add_file "$target"
+		sed -i -r -e "/${core}|${udev}/!d" "$BUILDROOT/$target"
+	done
+
+	local mod
+	for mod in bluetooth bnep hidp btusb btintel btrtl btmtk rfcomm usbhid; do
+		add_module "$mod"
+	done
+
+	for libnssfile in /usr/lib/libnss_files*; do
+		add_file "$libnssfile"
+	done
+	for libnslfile in /usr/lib/libnsl*; do
+		add_file "$libnslfile"
+	done
+
+	add_dir /etc/dbus-1/
+	add_dir /etc/dbus-1/system.d/
+	add_dir /run/dbus/
+	add_file /usr/share/dbus-1/system.conf
+	add_binary /usr/bin/dbus-daemon
+	add_file /usr/lib/sysusers.d/dbus.conf
+	add_file /usr/lib/tmpfiles.d/dbus.conf
+	add_symlink /var/lib/dbus/machine-id /etc/machine-id
+
+	add_file /etc/bluetooth/main.conf
+	add_binary /usr/lib/bluetooth/bluetoothd
+	add_file /usr/share/dbus-1/system.d/bluetooth.conf
+	add_file /usr/share/dbus-1/system-services/org.bluez.service
+	add_full_dir /var/lib/bluetooth
+	add_binary /usr/bin/bluetoothctl
+
+	add_dir /run/sdp/
+	add_symlink /var/run /run
+
+	add_runscript
+}
+
+help() {
+	cat <<HELPEOF
+Start bluetoothd in the initramfs so a paired Bluetooth keyboard can
+unlock LUKS. Place this hook after keyboard and before encrypt.
+HELPEOF
+}

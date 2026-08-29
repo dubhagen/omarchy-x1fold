@@ -1,0 +1,20 @@
+#!/usr/bin/ash
+# Runtime hook: bring up dbus + bluetoothd before the encrypt prompt.
+
+run_earlyhook() {
+	msg ":: Activating dbus..."
+	mkdir -p /run/dbus
+	/usr/bin/dbus-daemon --system --syslog-only
+}
+
+run_hook() {
+	msg ":: Activating bluetoothd..."
+	/usr/lib/bluetooth/bluetoothd &
+	# Give the ThinkPad BLE keyboard a moment to reconnect.
+	sleep 2
+}
+
+run_cleanuphook() {
+	killall bluetoothd 2>/dev/null
+	killall dbus-daemon 2>/dev/null
+}

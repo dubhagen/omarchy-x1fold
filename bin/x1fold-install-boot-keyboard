@@ -1,0 +1,33 @@
+#!/bin/bash
+# Install the initramfs bluetooth-keyboard hook and rebuild the image.
+set -euo pipefail
+
+PLUGIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SRC_INSTALL="$PLUGIN/initcpio/install/bluetoothkbd"
+SRC_HOOK="$PLUGIN/initcpio/hooks/bluetoothkbd"
+SRC_CONF="$PLUGIN/initcpio/zz-x1fold-bluetooth.conf"
+
+[[ -f $SRC_INSTALL && -f $SRC_HOOK && -f $SRC_CONF ]] || {
+  echo "x1fold-install-boot-keyboard: plugin files missing in $PLUGIN" >&2
+  exit 1
+}
+
+if [[ ! -t 0 || ! -t 1 ]]; then
+  echo "Run this in a terminal (sudo needs a password prompt):" >&2
+  echo "  $PLUGIN/bin/x1fold-install-boot-keyboard" >&2
+  echo "or:  $PLUGIN/setup.sh --boot" >&2
+  exit 1
+fi
+
+sudo mkdir -p /etc/initcpio/install /etc/initcpio/hooks /etc/mkinitcpio.conf.d
+sudo install -m 755 "$SRC_INSTALL" /etc/initcpio/install/bluetoothkbd
+sudo install -m 755 "$SRC_HOOK" /etc/initcpio/hooks/bluetoothkbd
+sudo install -m 644 "$SRC_CONF" /etc/mkinitcpio.conf.d/zz-x1fold-bluetooth.conf
+
+# Auto-power Bluetooth adapters so the paired keyboard reconnects in the initramfs.
+if [[ -f /etc/bluetooth/main.conf ]]; then
+  sudo sed -i 's/^#AutoEnable=true/AutoEnable=true/' /etc/bluetooth/main.conf
+fi
+
+sudo mkinitcpio -P
+echo "Bluetooth keyboard hook installed. Reboot to use the paired keyboard at the LUKS prompt."

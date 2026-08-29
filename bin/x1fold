@@ -1,0 +1,714 @@
+#!/usr/bin/env python3
+"""ThinkPad X1 Fold 16 posture control for Omarchy/Hyprland.
+
+Commands:
+  status
+  rotate 0|90|180|270|normal|left|right|inverted|cycle|portrait|portrait-flip|landscape|landscape-flip
+  clamshell on|off|toggle
+  autorotate on|off|toggle
+  autoclamshell on|off|toggle
+  osk on|off|toggle
+  cover-ratio <0.35-0.70>
+  overlap <pixels>
+  tablet               full panel (clamshell off)
+  apply
+  daemon
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+PLUGIN_ID = "mattd.x1fold"
+HOME = Path(os.environ.get("HOME", str(Path.home())))
+STATE_DIR = HOME / ".local" / "state" / "omarchy" / "x1fold"
+STATE_PATH = STATE_DIR / "state.json"
+MONITORS_LUA = Path(os.environ.get("OMARCHY_MONITORS_LUA", HOME / ".config" / "hypr" / "monitors.lua"))
+BEGIN_MARK = "-- mattd.x1fold: begin"
+END_MARK = "-- mattd.x1fold: end"
+ARRANGE_BEGIN = "-- omarchy-monitor-arrange: begin"
+INTERNAL_RE = re.compile(r"^(eDP|LVDS|DSI)-")
+SCREENSAVER_CLASS = "org.omarchy.screensaver"
+
+ORIENTATIONS = {
+    0: {"name": "portrait", "degrees": 0, "label": "Portrait"},
+    1: {"name": "landscape-flip", "degrees": 90, "label": "Landscape (flipped)"},
+    2: {"name": "portrait-flip", "degrees": 180, "label": "Portrait (flipped)"},
+    3: {"name": "landscape", "degrees": 270, "label": "Landscape"},
+}
+NAME_TO_TRANSFORM = {
+    "0": 0, "90": 1, "180": 2, "270": 3,
+    "normal": 0, "right": 1, "inverted": 2, "left": 3,
+    "portrait": 0, "landscape-flip": 1, "portrait-flip": 2, "landscape": 3,
+}
+
+# Landscape was calibrated on this chassis as gravity along -X → transform 3.
+# Portrait auto-rotate was upside-down in both directions, so Y is swapped
+# relative to the first mapping.
+ACCEL_MAP = {
+    ("x", 1): 1,
+    ("x", -1): 3,
+    ("y", 1): 2,
+    ("y", -1): 0,
+}
+
+DEFAULT_STATE = {
+    "transform": 3,
+    "clamshell": False,
+    "autorotate": False,
+    "autoclamshell": False,
+    "cover_ratio": 0.50,
+    "overlap_px": 0,
+    "osk": False,
+    "monitor_desc": "",
+}
+
+
+def fail(msg: str, code: int = 1) -> None:
+    print(f"x1fold: {msg}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, check=check, capture_output=True, text=True)
+
+
+def notify(title: str, body: str) -> None:
+    for cmd in (
+        ["omarchy-notification-send", "-u", "low", title, body],
+        ["notify-send", "-u", "low", title, body],
+    ):
+        if shutil.which(cmd[0]):
+            subprocess.run(cmd, check=False, capture_output=True)
+            return
+
+
+def osd(message: str, icon: str = "󰁑") -> None:
+    payload = json.dumps({"icon": icon, "message": message, "duration": 1400})
+    subprocess.run(
+        ["omarchy-shell", "-q", "osd", "show", payload],
+        check=False,
+        capture_output=True,
+    )
+
+
+def load_state() -> dict:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    state = dict(DEFAULT_STATE)
+    if STATE_PATH.exists():
+        try:
+            data = json.loads(STATE_PATH.read_text())
+            if isinstance(data, dict):
+                state.update(data)
+        except json.JSONDecodeError:
+            pass
+    state["transform"] = int(state.get("transform", 3)) % 4
+    state["clamshell"] = bool(state.get("clamshell"))
+    state["autorotate"] = bool(state.get("autorotate"))
+    state["autoclamshell"] = bool(state.get("autoclamshell"))
+    state["osk"] = bool(state.get("osk"))
+    try:
+        ratio = float(state.get("cover_ratio", 0.50))
+    except (TypeError, ValueError):
+        ratio = 0.50
+    state["cover_ratio"] = min(0.70, max(0.35, ratio))
+    try:
+        overlap = int(float(state["overlap_px"])) if "overlap_px" in state else 0
+    except (TypeError, ValueError):
+        overlap = 0
+    overlap = int(round(overlap / 5.0) * 5)
+    state["overlap_px"] = min(50, max(-50, overlap))
+    return state
+
+
+def save_state(state: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=2) + "\n")
+    tmp.replace(STATE_PATH)
+
+
+def hypr_monitors() -> list[dict]:
+    try:
+        out = run(["hyprctl", "monitors", "-j"]).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        fail(f"hyprctl monitors failed: {exc}")
+    try:
+        monitors = json.loads(out)
+    except json.JSONDecodeError:
+        fail("hyprctl monitors returned invalid JSON")
+    return [m for m in monitors if not m.get("disabled")]
+
+
+def is_internal(mon: dict) -> bool:
+    return bool(INTERNAL_RE.match(str(mon.get("name") or "")))
+
+
+def pick_monitor(state: dict) -> dict:
+    monitors = hypr_monitors()
+    if not monitors:
+        fail("no enabled monitors")
+    desc = state.get("monitor_desc") or ""
+    if desc:
+        for mon in monitors:
+            if mon.get("description") == desc:
+                return mon
+    for mon in monitors:
+        if is_internal(mon):
+            return mon
+    for mon in monitors:
+        if mon.get("focused"):
+            return mon
+    return monitors[0]
+
+
+def logical_size(mon: dict, transform: int) -> tuple[int, int]:
+    width = float(mon["width"])
+    height = float(mon["height"])
+    scale = float(mon.get("scale") or 1) or 1
+    if transform % 2 == 1:
+        return round(height / scale), round(width / scale)
+    return round(width / scale), round(height / scale)
+
+
+def is_portrait(transform: int) -> bool:
+    return transform % 2 == 0
+
+
+def lua_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def monitor_lua(mon: dict, transform: int, reserved_bottom: int) -> str:
+    desc = lua_escape(str(mon.get("description") or mon.get("name")))
+    width = int(mon["width"])
+    height = int(mon["height"])
+    refresh = float(mon.get("refreshRate") or 60)
+    x = int(mon.get("x") or 0)
+    y = int(mon.get("y") or 0)
+    scale = float(mon.get("scale") or 1)
+    vrr = 1 if mon.get("vrr") else 0
+    reserved = (
+        f"reserved_area = {{ top = 0, bottom = {int(reserved_bottom)}, left = 0, right = 0 }}"
+        if reserved_bottom
+        else "reserved_area = 0"
+    )
+    return (
+        f'hl.monitor({{ output = "desc:{desc}", mode = "{width}x{height}@{refresh:g}", '
+        f'position = "{x}x{y}", scale = {scale:g}, transform = {int(transform)}, '
+        f"vrr = {vrr}, {reserved} }})"
+    )
+
+
+def eval_monitor(lua: str) -> None:
+    try:
+        proc = run(["hyprctl", "eval", lua], check=False)
+    except FileNotFoundError:
+        fail("hyprctl not found")
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        fail(f"hyprctl eval failed: {err or lua}")
+
+
+def persist_lua(lua: str) -> None:
+    MONITORS_LUA.parent.mkdir(parents=True, exist_ok=True)
+    text = MONITORS_LUA.read_text() if MONITORS_LUA.exists() else ""
+    block = f"{BEGIN_MARK}\n{lua}\n{END_MARK}\n"
+    pattern = re.compile(re.escape(BEGIN_MARK) + r".*?" + re.escape(END_MARK) + r"\n?", re.S)
+    if pattern.search(text):
+        text = pattern.sub(block, text, count=1)
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += "\n" + block
+    MONITORS_LUA.write_text(text)
+
+
+def sync_arrange_transform(mon: dict, transform: int) -> None:
+    if not MONITORS_LUA.exists():
+        return
+    text = MONITORS_LUA.read_text()
+    desc = re.escape(str(mon.get("description") or ""))
+    if not desc or ARRANGE_BEGIN not in text:
+        return
+    updated, n = re.subn(
+        rf'(output = "desc:{desc}".*?transform = )\d+',
+        rf"\g<1>{int(transform)}",
+        text,
+        count=1,
+        flags=re.S,
+    )
+    if n:
+        MONITORS_LUA.write_text(updated)
+
+
+def reserved_bottom(mon: dict, transform: int, clamshell: bool, ratio: float, overlap: int) -> int:
+    if not clamshell or not is_portrait(transform):
+        return 0
+    _lw, lh = logical_size(mon, transform)
+    return max(0, round(lh * ratio) + int(overlap))
+
+
+def apply(state: dict, quiet: bool = False) -> dict:
+    mon = pick_monitor(state)
+    state["monitor_desc"] = mon.get("description") or ""
+    transform = int(state["transform"]) % 4
+    clamshell = bool(state["clamshell"])
+    if clamshell and not is_portrait(transform):
+        transform = 0
+        state["transform"] = transform
+    bottom = reserved_bottom(
+        mon, transform, clamshell, float(state["cover_ratio"]), int(state["overlap_px"])
+    )
+    lua = monitor_lua(mon, transform, bottom)
+    eval_monitor(lua)
+    persist_lua(lua)
+    sync_arrange_transform(mon, transform)
+    save_state(state)
+    if clamshell:
+        set_osk(False, persist=False)
+        state["osk"] = False
+        save_state(state)
+    if not quiet:
+        announce(state)
+    return state
+
+
+def announce(state: dict, bottom: int | None = None) -> None:
+    # The Omarchy OSD sits on the bottom edge. In clamshell that is under the
+    # keyboard, and a desktop notification would stack there too as a second
+    # window. Stay silent for clamshell; the screen change is the feedback.
+    if state.get("clamshell"):
+        return
+    info = ORIENTATIONS[int(state["transform"]) % 4]
+    parts = [info["label"]]
+    if state["autorotate"]:
+        parts.append("auto-rotate")
+    if state.get("osk"):
+        parts.append("on-screen keyboard")
+    osd(" · ".join(parts), "󰁑")
+
+
+def parse_transform(token: str, current: int) -> int:
+    key = token.strip().lower()
+    if key == "cycle":
+        return (current + 1) % 4
+    if key not in NAME_TO_TRANSFORM:
+        fail(f"unknown orientation: {token}")
+    return NAME_TO_TRANSFORM[key]
+
+
+def parse_bool(token: str, current: bool) -> bool:
+    key = token.strip().lower()
+    if key in {"on", "true", "1", "enable", "enabled"}:
+        return True
+    if key in {"off", "false", "0", "disable", "disabled"}:
+        return False
+    if key in {"toggle"}:
+        return not current
+    fail(f"expected on|off|toggle, got {token}")
+
+
+def status_payload(state: dict) -> dict:
+    mon = None
+    try:
+        mon = pick_monitor(state)
+    except SystemExit:
+        pass
+    transform = int(state["transform"]) % 4
+    info = ORIENTATIONS[transform]
+    payload = {
+        "plugin": PLUGIN_ID,
+        "transform": transform,
+        "degrees": info["degrees"],
+        "orientation": info["name"],
+        "label": info["label"],
+        "portrait": is_portrait(transform),
+        "clamshell": bool(state["clamshell"]),
+        "autorotate": bool(state["autorotate"]),
+        "autoclamshell": bool(state["autoclamshell"]),
+        "cover_ratio": float(state["cover_ratio"]),
+        "overlap_px": int(state["overlap_px"]),
+        "osk": bool(state.get("osk")),
+        "icon": "󰌌" if state["clamshell"] else ("󰁞" if is_portrait(transform) else "󰹑"),
+    }
+    if mon:
+        lw, lh = logical_size(mon, transform)
+        bottom = reserved_bottom(
+            mon, transform, bool(state["clamshell"]), float(state["cover_ratio"]), int(state["overlap_px"])
+        )
+        payload.update(
+            {
+                "monitor": mon.get("name"),
+                "description": mon.get("description"),
+                "logical_width": lw,
+                "logical_height": lh,
+                "reserved_bottom": bottom,
+                "hypr_transform": mon.get("transform"),
+                "hypr_reserved": mon.get("reserved"),
+            }
+        )
+    return payload
+
+
+def read_sysfs_int(path: Path) -> int | None:
+    try:
+        return int(path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def read_sysfs_float(path: Path) -> float | None:
+    try:
+        return float(path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def iio_devices() -> dict[str, list[Path]]:
+    root = Path("/sys/bus/iio/devices")
+    found: dict[str, list[Path]] = {"accel": [], "hinge": []}
+    if not root.exists():
+        return found
+    for dev in sorted(root.glob("iio:device*")):
+        try:
+            name = (dev / "name").read_text().strip()
+        except OSError:
+            continue
+        if name == "accel_3d":
+            found["accel"].append(dev)
+        elif name == "hinge":
+            found["hinge"].append(dev)
+    return found
+
+
+def read_accel_g(dev: Path) -> tuple[float, float, float] | None:
+    scale = read_sysfs_float(dev / "in_accel_scale") or 1.0
+    x = read_sysfs_int(dev / "in_accel_x_raw")
+    y = read_sysfs_int(dev / "in_accel_y_raw")
+    z = read_sysfs_int(dev / "in_accel_z_raw")
+    if None in (x, y, z):
+        return None
+    return x * scale, y * scale, z * scale
+
+
+def orientation_from_accel() -> int | None:
+    devices = iio_devices()["accel"]
+    samples = [s for s in (read_accel_g(dev) for dev in devices) if s]
+    if not samples:
+        return None
+    if len(samples) == 2:
+        a, b = samples
+        sample = a if abs(a[2]) <= abs(b[2]) else b
+        if abs(a[2] - b[2]) < 1.5:
+            sample = tuple((a[i] + b[i]) / 2 for i in range(3))  # type: ignore[assignment]
+    else:
+        sample = samples[0]
+    axes = {"x": sample[0], "y": sample[1], "z": sample[2]}
+    axis, value = max(axes.items(), key=lambda item: abs(item[1]))
+    second = sorted(abs(v) for v in axes.values())[-2]
+    if abs(value) < 6.0 or abs(value) < second * 1.25:
+        return None
+    if axis == "z":
+        return None
+    sign = 1 if value >= 0 else -1
+    return ACCEL_MAP.get((axis, sign))
+
+
+def hinge_degrees() -> dict[str, float]:
+    devices = iio_devices()["hinge"]
+    out: dict[str, float] = {}
+    if not devices:
+        return out
+    dev = devices[0]
+    scale = read_sysfs_float(dev / "in_angl_scale") or 1.0
+    to_deg = scale * (180.0 / 3.141592653589793)
+    for idx, key in enumerate(("hinge", "screen", "keyboard")):
+        raw = read_sysfs_int(dev / f"in_angl{idx}_raw")
+        if raw is None:
+            continue
+        out[key] = raw * to_deg
+    return out
+
+
+def screensaver_running() -> bool:
+    try:
+        clients = json.loads(run(["hyprctl", "clients", "-j"], check=False).stdout or "[]")
+    except (json.JSONDecodeError, FileNotFoundError):
+        return False
+    for client in clients:
+        if str(client.get("class") or "") == SCREENSAVER_CLASS:
+            return True
+    return False
+
+
+def monitor_matches(state: dict, mon: dict) -> bool:
+    if int(mon.get("transform") or 0) != int(state["transform"]) % 4:
+        return False
+    reserved = mon.get("reserved") or [0, 0, 0, 0]
+    got_bottom = int(reserved[3]) if len(reserved) > 3 else 0
+    want = reserved_bottom(
+        mon,
+        int(state["transform"]),
+        bool(state["clamshell"]),
+        float(state["cover_ratio"]),
+        int(state["overlap_px"]),
+    )
+    return abs(got_bottom - want) <= 4
+
+
+def osk_running() -> bool:
+    proc = run(["pgrep", "-f", "squeekboard"], check=False)
+    return proc.returncode == 0
+
+
+def ensure_osk_process() -> None:
+    if osk_running():
+        return
+    if not shutil.which("squeekboard"):
+        fail("squeekboard is not installed")
+    env = os.environ.copy()
+    env["SQUEEKBOARD_FORCE"] = "1"
+    subprocess.Popen(
+        ["squeekboard"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    for _ in range(20):
+        time.sleep(0.15)
+        if osk_running():
+            return
+
+
+def set_osk_visible(visible: bool) -> None:
+    if visible:
+        ensure_osk_process()
+    if not osk_running():
+        return
+    subprocess.run(
+        [
+            "busctl", "--user", "call",
+            "sm.puri.OSK0", "/sm/puri/OSK0", "sm.puri.OSK0",
+            "SetVisible", "b", "true" if visible else "false",
+        ],
+        check=False,
+        capture_output=True,
+    )
+
+
+def set_osk(wanted: bool, persist: bool = True) -> None:
+    set_osk_visible(wanted)
+    if persist:
+        state = load_state()
+        state["osk"] = wanted
+        save_state(state)
+
+
+def cmd_status(state: dict) -> int:
+    print(json.dumps(status_payload(state), indent=2))
+    return 0
+
+
+def cmd_rotate(state: dict, token: str) -> int:
+    state["transform"] = parse_transform(token, int(state["transform"]))
+    if state["clamshell"] and not is_portrait(state["transform"]):
+        state["clamshell"] = False
+    apply(state)
+    return 0
+
+
+def cmd_clamshell(state: dict, token: str) -> int:
+    wanted = parse_bool(token, bool(state["clamshell"]))
+    if wanted and not is_portrait(int(state["transform"])):
+        state["transform"] = 0
+    state["clamshell"] = wanted
+    apply(state)
+    return 0
+
+
+def cmd_flag(state: dict, key: str, token: str) -> int:
+    state[key] = parse_bool(token, bool(state[key]))
+    save_state(state)
+    announce(state)
+    return 0
+
+
+def cmd_cover_ratio(state: dict, token: str) -> int:
+    try:
+        ratio = float(token)
+    except ValueError:
+        fail(f"cover-ratio must be a number, got {token}")
+    state["cover_ratio"] = min(0.70, max(0.35, ratio))
+    apply(state)
+    return 0
+
+
+def cmd_overlap(state: dict, token: str) -> int:
+    try:
+        overlap = int(float(token))
+    except ValueError:
+        fail(f"overlap must be a number of pixels, got {token}")
+    overlap = int(round(overlap / 5.0) * 5)
+    state["overlap_px"] = min(50, max(-50, overlap))
+    apply(state)
+    return 0
+
+
+def cmd_osk(state: dict, token: str) -> int:
+    wanted = parse_bool(token, bool(state.get("osk")))
+    if wanted and state["clamshell"]:
+        fail("on-screen keyboard is hidden while clamshell is on")
+    set_osk(wanted)
+    state = load_state()
+    announce(state)
+    return 0
+
+
+def cmd_tablet(state: dict) -> int:
+    state["clamshell"] = False
+    apply(state)
+    return 0
+
+
+def cmd_daemon(state: dict) -> int:
+    pending_transform: int | None = None
+    pending_since = 0.0
+    last_apply = 0.0
+    resume_until = 0.0
+    saw_screensaver = False
+    while True:
+        state = load_state()
+        now = time.monotonic()
+        saver = screensaver_running()
+        if saver:
+            saw_screensaver = True
+            pending_transform = None
+            time.sleep(0.35)
+            continue
+        if saw_screensaver:
+            saw_screensaver = False
+            resume_until = now + 4.0
+            try:
+                apply(state, quiet=True)
+                last_apply = now
+            except SystemExit:
+                pass
+
+        changed = False
+        if state.get("autorotate") and now >= resume_until:
+            guessed = orientation_from_accel()
+            current = int(state["transform"])
+            if guessed is None or guessed == current:
+                pending_transform = None
+            elif guessed != pending_transform:
+                pending_transform = guessed
+                pending_since = now
+            elif now - pending_since >= 1.2:
+                if state["clamshell"] and not is_portrait(guessed):
+                    pass
+                else:
+                    state["transform"] = guessed
+                    if state["clamshell"] and not is_portrait(guessed):
+                        state["clamshell"] = False
+                    changed = True
+                pending_transform = None
+
+        if state.get("autoclamshell"):
+            hinge = hinge_degrees()
+            angle = hinge.get("hinge")
+            if angle is not None and angle != 0:
+                folded = 70.0 <= angle <= 140.0
+                if folded and is_portrait(int(state["transform"])) and not state["clamshell"]:
+                    state["clamshell"] = True
+                    changed = True
+                elif (not folded) and state["clamshell"] and angle < 30:
+                    state["clamshell"] = False
+                    changed = True
+
+        if not changed and now - last_apply > 0.8:
+            try:
+                mon = pick_monitor(state)
+                if not monitor_matches(state, mon):
+                    changed = True
+            except SystemExit:
+                pass
+
+        if changed and now - last_apply > 0.35:
+            try:
+                apply(state, quiet=True)
+                last_apply = now
+            except SystemExit:
+                pass
+
+        time.sleep(0.35)
+
+
+def usage() -> str:
+    return __doc__.strip()
+
+
+def main(argv: list[str]) -> int:
+    args = argv[1:]
+    if not args or args[0] in {"-h", "--help", "help"}:
+        print(usage())
+        return 0
+    cmd = args[0]
+    state = load_state()
+    if cmd == "status":
+        return cmd_status(state)
+    if cmd == "rotate":
+        if len(args) < 2:
+            fail("rotate needs an orientation")
+        return cmd_rotate(state, args[1])
+    if cmd == "clamshell":
+        if len(args) < 2:
+            fail("clamshell needs on|off|toggle")
+        return cmd_clamshell(state, args[1])
+    if cmd == "autorotate":
+        if len(args) < 2:
+            fail("autorotate needs on|off|toggle")
+        return cmd_flag(state, "autorotate", args[1])
+    if cmd == "autoclamshell":
+        if len(args) < 2:
+            fail("autoclamshell needs on|off|toggle")
+        return cmd_flag(state, "autoclamshell", args[1])
+    if cmd == "osk":
+        if len(args) < 2:
+            fail("osk needs on|off|toggle")
+        return cmd_osk(state, args[1])
+    if cmd == "cover-ratio":
+        if len(args) < 2:
+            fail("cover-ratio needs a number")
+        return cmd_cover_ratio(state, args[1])
+    if cmd == "overlap":
+        if len(args) < 2:
+            fail("overlap needs a pixel count")
+        return cmd_overlap(state, args[1])
+    if cmd in {"mini-laptop", "laptop"}:
+        return cmd_clamshell(state, "on")
+    if cmd == "tablet":
+        return cmd_tablet(state)
+    if cmd == "apply":
+        apply(state, quiet=True)
+        if "--notify" in args[1:]:
+            announce(state)
+        return 0
+    if cmd == "daemon":
+        return cmd_daemon(state)
+    fail(f"unknown command: {cmd}\n{usage()}")
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main(sys.argv))
+    except KeyboardInterrupt:
+        raise SystemExit(130)

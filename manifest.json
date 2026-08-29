@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "mattd.x1fold",
+  "name": "X1 Fold",
+  "version": "1.0.0",
+  "author": "mattd",
+  "description": "Orientation and clamshell (keyboard-half) mode for the ThinkPad X1 Fold 16",
+  "kinds": ["service", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "X1 Fold",
+    "description": "Rotate the folding display and cover the keyboard half in portrait clamshell mode",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
