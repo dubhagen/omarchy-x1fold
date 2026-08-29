@@ -14,6 +14,8 @@ Commands:
   apply
   constrain-fullscreen [address]
   constrain-screensaver [address]
+  fullscreen toggle|on|off [address]
+  sync-bar
   cursor hide|show
   daemon
 """
@@ -40,6 +42,10 @@ END_MARK = "-- mattd.x1fold: end"
 ARRANGE_BEGIN = "-- omarchy-monitor-arrange: begin"
 INTERNAL_RE = re.compile(r"^(eDP|LVDS|DSI)-")
 SCREENSAVER_CLASS = "org.omarchy.screensaver"
+BAR_OFF_FLAG = HOME / ".local" / "state" / "omarchy" / "toggles" / "bar-off"
+BAR_HIDDEN_MARKER = STATE_DIR / "bar-hidden-by-plugin"
+FS_PLACING_LOCK = STATE_DIR / "fs-placing.lock"
+FS_LAYOUT_PATH = STATE_DIR / "fs-layout.json"
 
 ORIENTATIONS = {
     0: {"name": "portrait", "degrees": 0, "label": "Portrait"},
@@ -254,21 +260,27 @@ def sync_arrange_transform(mon: dict, transform: int) -> None:
 
 
 def eval_screensaver_rule(state: dict, mon: dict, bottom: int) -> None:
-    """Map the screensaver at half size so TTE never sees the full pty."""
+    """Clamshell: map the screensaver already sized to the visible half.
+
+    Outside clamshell, restore Omarchy's stock covering-fullscreen + slide.
+    """
     clamshell = bool(state.get("clamshell"))
     if clamshell:
         lw, lh = logical_size(mon, int(state.get("transform") or 0) % 4)
         w, h = lw + 2, max(1, lh - int(bottom))
-        extra = f"fullscreen = false, size = {{ {w}, {h} }}, move = {{ -1, 0 }}, "
+        extra = (
+            "no_anim = true, float = true, fullscreen = false, "
+            f"size = {{ {w}, {h} }}, move = {{ -1, 0 }}"
+        )
     else:
-        extra = "fullscreen = true, "
+        extra = 'float = true, fullscreen = true, animation = "slide"'
     lua = (
         "hl.window_rule({ "
         'name = "mattd.x1fold-screensaver", '
         'match = { class = "org.omarchy.screensaver" }, '
         "decorate = false, rounding = 0, no_shadow = true, border_size = 0, "
-        "no_max_size = true, no_anim = true, float = true, "
-        f"{extra}}})"
+        "no_max_size = true, "
+        f"{extra} }})"
     )
     try:
         run(["hyprctl", "eval", lua], check=False)
@@ -305,6 +317,7 @@ def apply(state: dict, quiet: bool = False) -> dict:
         state["osk"] = False
         save_state(state)
     constrain_fullscreen(state)
+    sync_bar(state)
     if not quiet:
         announce(state)
     return state
@@ -326,6 +339,13 @@ def dispatch_lua(lua: str) -> None:
         pass
 
 
+def eval_lua(lua: str) -> None:
+    try:
+        run(["hyprctl", "eval", lua], check=False)
+    except FileNotFoundError:
+        pass
+
+
 def window_selector(address: str) -> str:
     addr = str(address)
     return addr if addr.startswith("address:") else f"address:{addr}"
@@ -336,6 +356,13 @@ def dispatch_fullscreen_state(address: str, internal: int, client: int) -> None:
     dispatch_lua(
         f'hl.dsp.window.fullscreen_state({{ internal = {int(internal)}, '
         f'client = {int(client)}, action = "set", window = "{sel}" }})'
+    )
+
+
+def set_window_prop(address: str, prop: str, value: str) -> None:
+    sel = window_selector(address)
+    dispatch_lua(
+        f'hl.dsp.window.set_prop({{ prop = "{prop}", value = "{value}", window = "{sel}" }})'
     )
 
 
@@ -394,7 +421,7 @@ def restore_cursor_after_screensaver() -> None:
     eval_cursor(invisible=False, no_hardware_cursors=hw)
 
 
-def screensaver_rect(mon: dict, state: dict) -> tuple[int, int, int, int]:
+def usable_rect(mon: dict, state: dict) -> tuple[int, int, int, int]:
     """Visible OLED half. -1/+2 covers a 1px scale-rounding gap on the left."""
     transform = int(state.get("transform") or 0) % 4
     lw, lh = logical_size(mon, transform)
@@ -408,6 +435,124 @@ def screensaver_rect(mon: dict, state: dict) -> tuple[int, int, int, int]:
     x = int(mon.get("x") or 0) - 1
     y = int(mon.get("y") or 0)
     return x, y, lw + 2, max(1, lh - bottom)
+
+
+def screensaver_rect(mon: dict, state: dict) -> tuple[int, int, int, int]:
+    return usable_rect(mon, state)
+
+
+def usable_geometry_ok(cur: dict, x: int, y: int, w: int, h: int) -> bool:
+    at = cur.get("at") or [0, 0]
+    size = cur.get("size") or [0, 0]
+    return (
+        bool(cur.get("floating"))
+        and int(cur.get("fullscreen") or 0) != 2
+        and abs(int(at[0]) - x) <= 2
+        and abs(int(at[1]) - y) <= 2
+        and abs(int(size[0]) - w) <= 4
+        and abs(int(size[1]) - h) <= 4
+    )
+
+
+def default_border_size() -> int:
+    opt = hypr_option("general:border_size")
+    try:
+        return int(opt.get("int") or 2)
+    except (TypeError, ValueError):
+        return 2
+
+
+def animations_enabled() -> bool:
+    opt = hypr_option("animations:enabled")
+    if "bool" in opt:
+        return bool(opt.get("bool"))
+    try:
+        return bool(int(opt.get("int") or 1))
+    except (TypeError, ValueError):
+        return True
+
+
+def set_animations_enabled(enabled: bool) -> None:
+    eval_lua(
+        "hl.config({ animations = { enabled = " + ("true" if enabled else "false") + " } })"
+    )
+
+
+def bar_parked() -> bool:
+    try:
+        data = json.loads(run(["hyprctl", "layers", "-j"], check=False).stdout or "{}")
+    except (json.JSONDecodeError, FileNotFoundError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    for md in data.values():
+        if not isinstance(md, dict):
+            continue
+        for ls in (md.get("levels") or {}).values():
+            for layer in ls or []:
+                ns = str((layer or {}).get("namespace") or "")
+                if "bar" in ns.lower():
+                    return int(layer.get("y") or 0) < 0
+    return False
+
+
+def wait_bar_unparked(timeout: float = 0.45) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not bar_parked():
+            return
+        time.sleep(0.02)
+
+
+def restore_window_chrome(addr: str) -> None:
+    """Undo fullscreen set_prop so the active-window border comes back."""
+    sel = window_selector(addr)
+    border = default_border_size()
+    eval_lua(
+        "local win = \"" + sel + "\"\n"
+        f'hl.dispatch(hl.dsp.window.set_prop({{ prop = "border_size", value = "{border}", window = win }}))\n'
+        'hl.dispatch(hl.dsp.window.set_prop({ prop = "no_anim", value = "0", window = win }))\n'
+        'hl.dispatch(hl.dsp.window.set_prop({ prop = "rounding", value = "0", window = win }))\n'
+    )
+
+
+def float_to_usable_half(
+    client: dict, state: dict, *, client_fullscreen: bool = False
+) -> bool:
+    """Size a floating window to the visible OLED half in one compositor eval."""
+    addr = str(client.get("address") or "")
+    if not addr:
+        return False
+    try:
+        mon = pick_monitor(state)
+    except SystemExit:
+        return False
+    x, y, w, h = usable_rect(mon, state)
+    sel = window_selector(addr)
+    if usable_geometry_ok(client, x, y, w, h):
+        return True
+    drop_fs = int(client.get("fullscreen") or 0) in {1, 2}
+    lua = (
+        "local win = \"" + sel + "\"\n"
+        'hl.dispatch(hl.dsp.window.set_prop({ prop = "sync_fullscreen", value = "0", window = win }))\n'
+        'hl.dispatch(hl.dsp.window.float({ action = "set", window = win }))\n'
+    )
+    if drop_fs or client_fullscreen:
+        lua += (
+            "hl.dispatch(hl.dsp.window.fullscreen_state("
+            '{ internal = 0, client = 2, action = "set", window = win }))\n'
+            'hl.dispatch(hl.dsp.window.float({ action = "set", window = win }))\n'
+        )
+    lua += (
+        f"hl.dispatch(hl.dsp.window.move({{ x = {x}, y = {y}, relative = false, window = win }}))\n"
+        f"hl.dispatch(hl.dsp.window.resize({{ x = {w}, y = {h}, relative = false, window = win }}))\n"
+    )
+    eval_lua(lua)
+    cur = _client_by_addr(addr) or client
+    if not cur.get("floating"):
+        dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
+        cur = _client_by_addr(addr) or cur
+    return usable_geometry_ok(cur, x, y, w, h)
 
 
 def _client_by_addr(addr: str) -> dict | None:
@@ -426,53 +571,103 @@ def place_screensaver(client: dict, state: dict) -> bool:
     A floating window does not join dwindle, so other clients keep their size.
     ttfx samples the pty once; after a successful resize, restart it.
     """
-    addr = str(client.get("address") or "")
-    if not addr:
-        return False
     try:
         mon = pick_monitor(state)
     except SystemExit:
         return False
-    x, y, w, h = screensaver_rect(mon, state)
-    sel = window_selector(addr)
-
-    def geometry_ok(cur: dict) -> bool:
-        at = cur.get("at") or [0, 0]
-        size = cur.get("size") or [0, 0]
-        return (
-            bool(cur.get("floating"))
-            and int(cur.get("fullscreen") or 0) != 2
-            and abs(int(at[0]) - x) <= 2
-            and abs(int(at[1]) - y) <= 2
-            and abs(int(size[0]) - w) <= 4
-            and abs(int(size[1]) - h) <= 4
-        )
-
-    if geometry_ok(client):
-        hide_cursor_for_screensaver()
-        return True
-
-    dispatch_lua(
-        f'hl.dsp.window.set_prop({{ prop = "no_anim", value = "1", window = "{sel}" }})'
-    )
-    dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
-    if int(client.get("fullscreen") or 0) == 2:
-        dispatch_fullscreen_state(addr, 0, 0)
-        dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
-    dispatch_lua(f'hl.dsp.window.move({{ x = {x}, y = {y}, window = "{sel}" }})')
-    dispatch_lua(f'hl.dsp.window.resize({{ x = {w}, y = {h}, window = "{sel}" }})')
-    dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
+    x, y, w, h = usable_rect(mon, state)
+    already = usable_geometry_ok(client, x, y, w, h)
+    placed = float_to_usable_half(client, state)
     hide_cursor_for_screensaver()
-
-    cur = _client_by_addr(addr) or client
-    if not cur.get("floating"):
-        dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
-        cur = _client_by_addr(addr) or cur
-    if geometry_ok(cur):
+    if placed and not already:
         # ttfx already measured the fullscreen pty; restart so it uses half size.
         run(["pkill", "-x", "ttfx"], check=False)
+    return placed
+
+
+def client_tags(client: dict) -> list[str]:
+    tags = client.get("tags") or []
+    if isinstance(tags, str):
+        return [tags]
+    return [str(t) for t in tags] if isinstance(tags, list) else []
+
+
+def clamshell_fs_live(client: dict) -> bool:
+    """True only while our half-panel overlay (or covering-fs) is actually up."""
+    if is_screensaver(client):
+        return True
+    if int(client.get("fullscreen") or 0) == 2:
+        return True
+    tags = client_tags(client)
+    if "x1fold-clamshell-fs" in tags and client.get("floating"):
         return True
     return False
+
+
+def cleanup_stale_clamshell_fs(client: dict) -> None:
+    """Drop leftover tags/client-fs on windows that are tiled again."""
+    if is_screensaver(client) or clamshell_fs_live(client):
+        return
+    tags = client_tags(client)
+    stale_tag = "x1fold-clamshell-fs" in tags or "x1fold-was-tiled" in tags
+    stale_client = int(client.get("fullscreenClient") or 0) == 2 and not client.get("floating")
+    if not stale_tag and not stale_client:
+        return
+    addr = str(client.get("address") or "")
+    if not addr:
+        return
+    if stale_client:
+        dispatch_fullscreen_state(addr, 0, 0)
+    if stale_tag:
+        tag_window(addr, "-x1fold-was-tiled")
+        tag_window(addr, "-x1fold-clamshell-fs")
+    restore_window_chrome(addr)
+
+
+def fullscreen_needs_bar_hidden(state: dict) -> bool:
+    """Park the bar only while a real clamshell fullscreen overlay is up.
+
+    A tiled window can keep fullscreenClient=2 after YouTube/Super+F exit;
+    that must not keep the bar hidden.
+    """
+    if not bool(state.get("clamshell")):
+        return False
+    return any(clamshell_fs_live(client) for client in hypr_clients())
+
+
+def sync_bar(state: dict) -> bool:
+    """Park the Omarchy bar during clamshell fullscreen; restore if we hid it.
+
+    Uses the same `bar-off` flag as `omarchy toggle bar`. If the user already
+    hid the bar, leave it. Covering-fullscreen on the full panel hides the
+    bar; maximize-inside-the-half does not, so we park it ourselves.
+    """
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = STATE_DIR / "bar-sync.lock"
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for client in hypr_clients():
+            cleanup_stale_clamshell_fs(client)
+            if (
+                not clamshell_fs_live(client)
+                and not client.get("floating")
+                and client.get("address")
+            ):
+                restore_window_chrome(str(client.get("address")))
+        want_hidden = fullscreen_needs_bar_hidden(state)
+        ours = BAR_HIDDEN_MARKER.exists()
+        flag = BAR_OFF_FLAG.exists()
+        if want_hidden:
+            if flag and not ours:
+                return True
+            BAR_OFF_FLAG.parent.mkdir(parents=True, exist_ok=True)
+            BAR_OFF_FLAG.touch()
+            BAR_HIDDEN_MARKER.write_text("1\n")
+            return True
+        if ours:
+            BAR_HIDDEN_MARKER.unlink(missing_ok=True)
+            BAR_OFF_FLAG.unlink(missing_ok=True)
+        return False
 
 
 def constrain_screensaver(state: dict, address: str | None = None) -> bool:
@@ -497,15 +692,257 @@ def constrain_screensaver(state: dict, address: str | None = None) -> bool:
         return found and placed
 
 
+def tag_window(address: str, tag: str) -> None:
+    sel = window_selector(address)
+    dispatch_lua(f'hl.dsp.window.tag({{ tag = "{tag}", window = "{sel}" }})')
+
+
+def placing_begin() -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    FS_PLACING_LOCK.write_text("1\n")
+
+
+def placing_end() -> None:
+    FS_PLACING_LOCK.unlink(missing_ok=True)
+
+
+def addr_key(address: str) -> str:
+    return str(address or "").lower().replace("address:", "")
+
+
+def workspace_id(client: dict) -> int | None:
+    ws = client.get("workspace")
+    if isinstance(ws, dict):
+        try:
+            return int(ws.get("id"))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def tiled_on_workspace(ws: int | None) -> list[dict]:
+    out: list[dict] = []
+    if ws is None:
+        return out
+    for client in hypr_clients():
+        if client.get("floating"):
+            continue
+        if workspace_id(client) != ws:
+            continue
+        out.append(client)
+    out.sort(
+        key=lambda c: (
+            int((c.get("at") or [0, 0])[1]),
+            int((c.get("at") or [0, 0])[0]),
+        )
+    )
+    return out
+
+
+def split_hint(client: dict, tiled: list[dict]) -> str | None:
+    want = addr_key(str(client.get("address") or ""))
+    others = [c for c in tiled if addr_key(str(c.get("address") or "")) != want]
+    if not others:
+        return None
+    tx, ty = (client.get("at") or [0, 0])[:2]
+    ox = min(int((c.get("at") or [0, 0])[0]) for c in others)
+    oy = min(int((c.get("at") or [0, 0])[1]) for c in others)
+    dx = int(tx) - ox
+    dy = int(ty) - oy
+    if abs(dx) >= abs(dy):
+        return "l" if dx < 0 else "r"
+    return "u" if dy < 0 else "d"
+
+
+def save_tile_layout(client: dict) -> None:
+    ws = workspace_id(client)
+    tiled = tiled_on_workspace(ws)
+    payload = {
+        "address": client.get("address"),
+        "workspace": ws,
+        "order": [c.get("address") for c in tiled],
+        "hint": split_hint(client, tiled),
+    }
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    FS_LAYOUT_PATH.write_text(json.dumps(payload) + "\n")
+
+
+def wait_client(addr: str, pred, timeout: float = 0.6) -> dict | None:
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = _client_by_addr(addr)
+        if last and pred(last):
+            return last
+        time.sleep(0.03)
+    return last or _client_by_addr(addr)
+
+
+def set_window_tiled(addr: str) -> bool:
+    sel = window_selector(addr)
+    for action in ("off", "disable"):
+        dispatch_lua(f'hl.dsp.window.float({{ action = "{action}", window = "{sel}" }})')
+        cur = wait_client(addr, lambda c: not c.get("floating"), 0.35)
+        if cur and not cur.get("floating"):
+            return True
+    return False
+
+
+def restore_tile_order(addr: str) -> None:
+    if not FS_LAYOUT_PATH.exists():
+        return
+    try:
+        data = json.loads(FS_LAYOUT_PATH.read_text())
+    except json.JSONDecodeError:
+        return
+    desired = [addr_key(a) for a in (data.get("order") or []) if a]
+    if not desired:
+        return
+    ws = data.get("workspace")
+    sel = window_selector(addr)
+    want = addr_key(addr)
+    for _ in range(max(4, len(desired))):
+        current = [addr_key(str(c.get("address") or "")) for c in tiled_on_workspace(ws)]
+        if want not in current or want not in desired:
+            return
+        got_i = current.index(want)
+        want_i = desired.index(want)
+        if got_i == want_i:
+            return
+        other = current[want_i]
+        dispatch_lua(f'hl.dsp.focus({{ window = "{sel}" }})')
+        dispatch_lua(
+            f'hl.dsp.window.swap({{ target = "{window_selector(other)}" }})'
+        )
+
+
+def is_clamshell_fs(client: dict) -> bool:
+    if is_screensaver(client):
+        return False
+    if clamshell_fs_live(client):
+        return True
+    tags = client_tags(client)
+    return "x1fold-clamshell-fs" in tags and bool(client.get("floating"))
+
+
+def hypr_active_client() -> dict | None:
+    try:
+        out = run(["hyprctl", "activewindow", "-j"], check=False).stdout or "{}"
+        data = json.loads(out)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return None
+    return data if isinstance(data, dict) and data.get("address") else None
+
+
+def restore_tiled_after_clamshell_fs(client: dict) -> None:
+    addr = str(client.get("address") or "")
+    if not addr:
+        return
+    tags = client_tags(client)
+    was_tiled = "x1fold-was-tiled" in tags
+    recover = bool(client.get("floating")) and (
+        int(client.get("fullscreenClient") or 0) == 2
+        or "x1fold-clamshell-fs" in tags
+    )
+    hint = None
+    ws = None
+    if FS_LAYOUT_PATH.exists():
+        try:
+            saved = json.loads(FS_LAYOUT_PATH.read_text())
+            if addr_key(str(saved.get("address") or "")) == addr_key(addr):
+                hint = saved.get("hint")
+                ws = saved.get("workspace")
+        except json.JSONDecodeError:
+            pass
+    leftovers = tiled_on_workspace(ws if ws is not None else workspace_id(client))
+    pre = ""
+    if leftovers and (was_tiled or recover) and hint in {"l", "r", "u", "d"}:
+        other = window_selector(str(leftovers[0].get("address") or ""))
+        pre = (
+            f'hl.dispatch(hl.dsp.focus({{ window = "{other}" }}))\n'
+            f'hl.dispatch(hl.dsp.layout("preselect {hint}"))\n'
+        )
+    sel = window_selector(addr)
+    border = default_border_size()
+    eval_lua(
+        pre
+        + "local win = \"" + sel + "\"\n"
+        "hl.dispatch(hl.dsp.window.fullscreen_state("
+        '{ internal = 0, client = 0, action = "set", window = win }))\n'
+        + (
+            'hl.dispatch(hl.dsp.window.float({ action = "off", window = win }))\n'
+            if (was_tiled or recover)
+            else ""
+        )
+        + f'hl.dispatch(hl.dsp.window.set_prop({{ prop = "border_size", value = "{border}", window = win }}))\n'
+    )
+    tiled_ok = True
+    if was_tiled or recover:
+        tiled_ok = bool(
+            wait_client(addr, lambda c: not c.get("floating"), 0.45)
+            and not (_client_by_addr(addr) or {}).get("floating")
+        )
+        if not tiled_ok:
+            tiled_ok = set_window_tiled(addr)
+        if tiled_ok:
+            restore_tile_order(addr)
+    if not tiled_ok:
+        # Leave tags so Super+F can retry; do not bring the bar back over a float.
+        return
+    restore_window_chrome(addr)
+    tag_window(addr, "-x1fold-was-tiled")
+    tag_window(addr, "-x1fold-clamshell-fs")
+    FS_LAYOUT_PATH.unlink(missing_ok=True)
+
+
+def enter_clamshell_fs(state: dict, client: dict) -> None:
+    addr = str(client.get("address") or "")
+    if not addr:
+        return
+    try:
+        mon = pick_monitor(state)
+    except SystemExit:
+        return
+    x, y, w, h = usable_rect(mon, state)
+    if is_clamshell_fs(client) and usable_geometry_ok(client, x, y, w, h):
+        return
+    placing_begin()
+    try:
+        if not client.get("floating"):
+            save_tile_layout(client)
+            tag_window(addr, "+x1fold-was-tiled")
+        # Tag first so the no-border / no-anim rule applies for the place.
+        tag_window(addr, "+x1fold-clamshell-fs")
+        float_to_usable_half(client, state, client_fullscreen=True)
+    finally:
+        placing_end()
+
+
+def exit_clamshell_fs(client: dict) -> None:
+    # Freeze layout animation so un-float, dwindle split, and bar exclusive
+    # zone apply as one cut instead of a visible window dance.
+    anims = animations_enabled()
+    if anims:
+        set_animations_enabled(False)
+    placing_begin()
+    try:
+        restore_tiled_after_clamshell_fs(client)
+    finally:
+        placing_end()
+    sync_bar(load_state())
+    if anims:
+        wait_bar_unparked()
+        set_animations_enabled(True)
+
+
 def constrain_fullscreen(state: dict, address: str | None = None) -> None:
     """In clamshell, keep client-fullscreen apps in the reserved usable half.
 
-    Hyprland fullscreen (internal=2) covers the whole OLED, including the
-    keyboard. Internal maximize (1) respects reserved_area; client=2 still
-    tells YouTube/Chromium they are fullscreen.
-
-    The screensaver is handled separately: it stays floating so the layout
-    does not reflow, then is sized to the visible half.
+    Covering-fullscreen uses the whole OLED. Maximize keeps gaps/borders and
+    Hyprland will not move/resize a maximized window. Super+F therefore floats
+    the window onto the visible half directly (no covering flash). YouTube
+    still requests covering; that is remapped the same way. Tiled windows get
+    +x1fold-was-tiled so exit can tile them back.
     """
     clamshell = bool(state.get("clamshell"))
     want = str(address or "").lower().replace("address:", "")
@@ -519,19 +956,52 @@ def constrain_fullscreen(state: dict, address: str | None = None) -> None:
             continue
         internal = int(client.get("fullscreen") or 0)
         client_fs = int(client.get("fullscreenClient") or 0)
-        if clamshell and internal == 2:
-            dispatch_fullscreen_state(addr, 1, 2)
-        elif (not clamshell) and internal == 1 and client_fs == 2:
+        tags = client_tags(client)
+        if clamshell and (internal == 2 or (internal == 1 and client_fs == 2)):
+            enter_clamshell_fs(state, client)
+        elif (not clamshell) and (
+            "x1fold-clamshell-fs" in tags
+            or (internal == 1 and client_fs == 2)
+            or (bool(client.get("floating")) and client_fs == 2)
+        ):
+            exit_clamshell_fs(client)
             dispatch_fullscreen_state(addr, 2, 2)
+
+
+def cmd_fullscreen(state: dict, token: str, address: str | None = None) -> int:
+    client = _client_by_addr(address) if address else hypr_active_client()
+    if not client:
+        fail("no window to fullscreen")
+    tagged = is_clamshell_fs(client)
+    if token in {"toggle", ""}:
+        if tagged:
+            exit_clamshell_fs(client)
+        else:
+            enter_clamshell_fs(state, client)
+    elif token in {"off", "exit", "unset", "0"}:
+        if tagged:
+            exit_clamshell_fs(client)
+    else:
+        enter_clamshell_fs(state, client)
+    sync_bar(state)
+    return 0
 
 
 def cmd_constrain_fullscreen(state: dict, address: str | None = None) -> int:
     constrain_fullscreen(state, address)
+    sync_bar(state)
     return 0
 
 
 def cmd_constrain_screensaver(state: dict, address: str | None = None) -> int:
     constrain_screensaver(state, address)
+    sync_bar(state)
+    return 0
+
+
+def cmd_sync_bar(state: dict) -> int:
+    hidden = sync_bar(state)
+    print("hidden" if hidden else "shown")
     return 0
 
 
@@ -540,6 +1010,7 @@ def cmd_cursor(state: dict, token: str) -> int:
         hide_cursor_for_screensaver()
     else:
         restore_cursor_after_screensaver()
+        sync_bar(state)
     return 0
 
 
@@ -966,8 +1437,16 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "constrain-fullscreen":
         return cmd_constrain_fullscreen(state, args[1] if len(args) > 1 else None)
+    if cmd == "fullscreen":
+        return cmd_fullscreen(
+            state,
+            args[1] if len(args) > 1 else "toggle",
+            args[2] if len(args) > 2 else None,
+        )
     if cmd == "constrain-screensaver":
         return cmd_constrain_screensaver(state, args[1] if len(args) > 1 else None)
+    if cmd == "sync-bar":
+        return cmd_sync_bar(state)
     if cmd == "cursor":
         if len(args) < 2:
             fail("cursor needs hide|show")

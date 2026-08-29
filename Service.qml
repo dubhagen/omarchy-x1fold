@@ -24,8 +24,8 @@ Item {
   property string statusIcon: "󰹑"
   property string pendingCommand: ""
   property var screensaverWindows: ({})
-  property bool barHiddenByScreensaver: false
-  property bool barHiddenBeforeScreensaver: false
+  property bool barHiddenByUs: false
+  property bool pendingBarSync: false
   readonly property int reservedLogical: {
     if (!clamshell)
       return 0
@@ -120,6 +120,17 @@ Item {
     id: ssProc
   }
 
+  Process {
+    id: barSyncProc
+    onExited: {
+      if (root.pendingBarSync) {
+        root.pendingBarSync = false
+        barSyncProc.command = [root.script, "sync-bar"]
+        barSyncProc.running = true
+      }
+    }
+  }
+
   Timer {
     id: ssRetry
     interval: 80
@@ -135,6 +146,27 @@ Item {
       if (!ssProc.running) {
         ssProc.command = [root.script, "constrain-screensaver"]
         ssProc.running = true
+      }
+      if (left <= 0)
+        stop()
+    }
+  }
+
+  Timer {
+    id: fsRetry
+    interval: 80
+    repeat: true
+    property int left: 0
+    onTriggered: {
+      if (!root.clamshell || left <= 0) {
+        stop()
+        left = 0
+        return
+      }
+      left -= 1
+      if (!fsProc.running) {
+        fsProc.command = [root.script, "constrain-fullscreen"]
+        fsProc.running = true
       }
       if (left <= 0)
         stop()
@@ -162,60 +194,38 @@ Item {
     return n > 0
   }
 
-  function eachBarPanel(fn) {
-    if (!root.shell || !root.shell.bar)
-      return
-    var seen = []
-    function visit(node, depth) {
-      if (!node || depth > 10 || seen.length > 200)
-        return
-      for (var s = 0; s < seen.length; s++)
-        if (seen[s] === node)
-          return
-      seen.push(node)
-      if (root.layerNamespace(node) === "omarchy-bar")
-        fn(node)
-      var lists = []
-      try { if (node.children) lists.push(node.children) } catch (e) {}
-      try { if (node.data) lists.push(node.data) } catch (e) {}
-      try { if (node.instances) lists.push(node.instances) } catch (e) {}
-      for (var li = 0; li < lists.length; li++) {
-        var list = lists[li]
-        if (!list)
-          continue
-        var n = list.length
-        for (var i = 0; i < n; i++)
-          visit(list[i], depth + 1)
-      }
-    }
-    visit(root.shell.bar, 0)
+  function setBarHidden(hidden) {
+    if (root.shell && root.shell.bar && root.shell.bar.barHidden !== undefined)
+      root.shell.bar.barHidden = hidden
   }
 
-  function hideBarForScreensaver() {
+  function requestBarSync() {
+    if (barSyncProc.running) {
+      root.pendingBarSync = true
+      return
+    }
+    barSyncProc.command = [root.script, "sync-bar"]
+    barSyncProc.running = true
+  }
+
+  function hideBarForFullscreen() {
     if (!root.clamshell)
       return
-    // Opacity only. barHidden drops the exclusive zone and reflows tiles.
-    root.barHiddenByScreensaver = true
-    function hide(node) {
-      if (root.layerNamespace(node) === "omarchy-bar" && node.opacity !== undefined)
-        node.opacity = 0
-    }
-    root.eachBarPanel(hide)
-    if (root.shell)
-      root.visitPluginTree(root.shell, hide)
+    if (root.shell && root.shell.bar && root.shell.bar.barHidden && !root.barHiddenByUs)
+      return
+    root.barHiddenByUs = true
+    root.setBarHidden(true)
+    root.requestBarSync()
   }
 
-  function restoreBarAfterScreensaver() {
-    if (!root.barHiddenByScreensaver)
+  function restoreBarAfterFullscreen() {
+    if (!root.barHiddenByUs)
       return
-    root.barHiddenByScreensaver = false
-    function show(node) {
-      if (root.layerNamespace(node) === "omarchy-bar" && node.opacity !== undefined)
-        node.opacity = 1
-    }
-    root.eachBarPanel(show)
-    if (root.shell)
-      root.visitPluginTree(root.shell, show)
+    if (root.screensaverOpen())
+      return
+    root.barHiddenByUs = false
+    root.setBarHidden(false)
+    root.requestBarSync()
   }
 
   function layerNamespace(item) {
@@ -404,7 +414,7 @@ Item {
       next[String(parts[0] || "")] = true
       root.screensaverWindows = next
       if (root.clamshell) {
-        root.hideBarForScreensaver()
+        root.hideBarForFullscreen()
         ssProc.command = [root.script, "constrain-screensaver", String(parts[0] || "")]
         ssProc.running = true
         ssRetry.left = 20
@@ -417,7 +427,7 @@ Item {
         delete cleared[address]
         root.screensaverWindows = cleared
         if (!root.screensaverOpen()) {
-          root.restoreBarAfterScreensaver()
+          root.restoreBarAfterFullscreen()
           ssProc.command = [root.script, "cursor", "show"]
           ssProc.running = true
         }
@@ -426,9 +436,27 @@ Item {
     } else if (name === "monitoradded" || name === "configreloaded") {
       restoreTimer.restart()
     } else if (name === "fullscreen") {
-      if (root.clamshell && String(parts[1] || "") === "1") {
-        fsProc.command = [root.script, "constrain-fullscreen", String(parts[0] || "")]
+      // socket2 data is "0"/"1". Some builds prefix an address. Named Lua
+      // hooks do the in-process remap; this is the retry backup.
+      var entered = false
+      var addr = ""
+      if (parts.length >= 2) {
+        entered = String(parts[parts.length - 1] || "") === "1"
+        addr = String(parts[0] || "")
+        if (addr === "0" || addr === "1")
+          addr = ""
+      } else {
+        entered = String(parts[0] || "") === "1"
+      }
+      if (root.clamshell && entered) {
+        root.hideBarForFullscreen()
+        var argv = [root.script, "constrain-fullscreen"]
+        if (addr.indexOf("0x") === 0)
+          argv.push(addr)
+        fsProc.command = argv
         fsProc.running = true
+        fsRetry.left = 2
+        fsRetry.restart()
       }
     } else if (name === "openlayer" || name === "createlayer") {
       overlayTimer.restart()
