@@ -25,6 +25,7 @@ Item {
   property string pendingCommand: ""
   property var screensaverWindows: ({})
   property bool barHiddenByScreensaver: false
+  property bool barHiddenBeforeScreensaver: false
   readonly property int reservedLogical: {
     if (!clamshell)
       return 0
@@ -166,7 +167,7 @@ Item {
       return
     var seen = []
     function visit(node, depth) {
-      if (!node || depth > 8 || seen.length > 40)
+      if (!node || depth > 10 || seen.length > 200)
         return
       for (var s = 0; s < seen.length; s++)
         if (seen[s] === node)
@@ -177,6 +178,7 @@ Item {
       var lists = []
       try { if (node.children) lists.push(node.children) } catch (e) {}
       try { if (node.data) lists.push(node.data) } catch (e) {}
+      try { if (node.instances) lists.push(node.instances) } catch (e) {}
       for (var li = 0; li < lists.length; li++) {
         var list = lists[li]
         if (!list)
@@ -190,18 +192,23 @@ Item {
   }
 
   function hideBarForScreensaver() {
-    if (!root.clamshell)
+    if (!root.clamshell || !root.shell || !root.shell.bar)
       return
-    // Do not set barHidden: that drops the exclusive zone and reflows tiled
-    // windows. Park the bar surface off-screen and keep Auto exclusive zone.
-    root.barHiddenByScreensaver = true
-    root.eachBarPanel(function(panel) {
-      if (panel.opacity !== undefined)
-        panel.opacity = 0
-      if (panel.margins !== undefined) {
-        var h = Math.round(panel.implicitHeight || panel.height || 26)
-        panel.margins = { left: 0, right: 0, top: -h, bottom: 0 }
-      }
+    // barHidden parks the surface off-screen. It also binds exclusionMode to
+    // Ignore, which reflows tiled windows. Put Auto back so the reserved
+    // strip stays while the bar is invisible.
+    if (!root.barHiddenByScreensaver) {
+      root.barHiddenBeforeScreensaver = root.shell.bar.barHidden === true
+      root.barHiddenByScreensaver = true
+    }
+    if ("barHidden" in root.shell.bar)
+      root.shell.bar.barHidden = true
+    Qt.callLater(function() {
+      root.eachBarPanel(function(panel) {
+        panel.exclusionMode = ExclusionMode.Auto
+        if (panel.opacity !== undefined)
+          panel.opacity = 0
+      })
     })
   }
 
@@ -209,11 +216,11 @@ Item {
     if (!root.barHiddenByScreensaver)
       return
     root.barHiddenByScreensaver = false
+    if (root.shell && root.shell.bar && "barHidden" in root.shell.bar)
+      root.shell.bar.barHidden = root.barHiddenBeforeScreensaver
     root.eachBarPanel(function(panel) {
       if (panel.opacity !== undefined)
         panel.opacity = 1
-      if (panel.margins !== undefined)
-        panel.margins = { left: 0, right: 0, top: 0, bottom: 0 }
     })
   }
 
@@ -373,7 +380,7 @@ Item {
       if (root.clamshell) {
         ssProc.command = [root.script, "constrain-screensaver", String(parts[0] || "")]
         ssProc.running = true
-        ssRetry.left = 8
+        ssRetry.left = 20
         ssRetry.restart()
       }
     } else if (name === "closewindow") {

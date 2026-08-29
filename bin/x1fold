@@ -20,6 +20,7 @@ Commands:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -369,44 +370,107 @@ def restore_cursor_after_screensaver() -> None:
     eval_cursor(invisible=False, no_hardware_cursors=hw)
 
 
-def place_screensaver(client: dict, state: dict) -> bool:
-    """Keep covering fullscreen. Do not tile or resize.
+def screensaver_rect(mon: dict, state: dict) -> tuple[int, int, int, int]:
+    """Visible OLED half. -1/+2 covers a 1px scale-rounding gap on the left."""
+    transform = int(state.get("transform") or 0) % 4
+    lw, lh = logical_size(mon, transform)
+    bottom = reserved_bottom(
+        mon,
+        transform,
+        True,
+        float(state.get("cover_ratio") or 0.50),
+        int(state.get("overlap_px") or 0),
+    )
+    x = int(mon.get("x") or 0) - 1
+    y = int(mon.get("y") or 0)
+    return x, y, lw + 2, max(1, lh - bottom)
 
-    Un-fullscreening this window to size it pulled it into dwindle and
-    reflowed every other client. Covering fullscreen is Super+F: no bar,
-    no gaps, no layout change. The Overlay keyboard mask covers the lower
-    half. Re-assert cursor:invisible after map; Hyprland otherwise shows
-    the pointer on a non-game fullscreen surface.
+
+def _client_by_addr(addr: str) -> dict | None:
+    want = addr.lower().replace("address:", "")
+    for client in hypr_clients():
+        got = str(client.get("address") or "").lower().replace("address:", "")
+        if got == want:
+            return client
+    return None
+
+
+def place_screensaver(client: dict, state: dict) -> bool:
+    """Float + shrink after map so TTE measures the visible half.
+
+    Wayland fullscreen is always the whole output; reserved_area is ignored.
+    A floating window does not join dwindle, so other clients keep their size.
+    ttfx samples the pty once; after a successful resize, restart it.
     """
     addr = str(client.get("address") or "")
     if not addr:
         return False
+    try:
+        mon = pick_monitor(state)
+    except SystemExit:
+        return False
+    x, y, w, h = screensaver_rect(mon, state)
     sel = window_selector(addr)
-    internal = int(client.get("fullscreen") or 0)
-    if internal != 2:
-        dispatch_lua(
-            f'hl.dsp.window.fullscreen({{ mode = "fullscreen", action = "set", window = "{sel}" }})'
+
+    def geometry_ok(cur: dict) -> bool:
+        at = cur.get("at") or [0, 0]
+        size = cur.get("size") or [0, 0]
+        return (
+            bool(cur.get("floating"))
+            and int(cur.get("fullscreen") or 0) != 2
+            and abs(int(at[0]) - x) <= 2
+            and abs(int(at[1]) - y) <= 2
+            and abs(int(size[0]) - w) <= 4
+            and abs(int(size[1]) - h) <= 4
         )
+
+    if geometry_ok(client):
+        hide_cursor_for_screensaver()
+        return True
+
+    dispatch_lua(
+        f'hl.dsp.window.set_prop({{ prop = "no_anim", value = "1", window = "{sel}" }})'
+    )
+    dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
+    if int(client.get("fullscreen") or 0) == 2:
+        dispatch_fullscreen_state(addr, 0, 0)
+        dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
+    dispatch_lua(f'hl.dsp.window.move({{ x = {x}, y = {y}, window = "{sel}" }})')
+    dispatch_lua(f'hl.dsp.window.resize({{ x = {w}, y = {h}, window = "{sel}" }})')
+    dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
     hide_cursor_for_screensaver()
-    return internal == 2
+
+    cur = _client_by_addr(addr) or client
+    if not cur.get("floating"):
+        dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
+        cur = _client_by_addr(addr) or cur
+    if geometry_ok(cur):
+        # ttfx already measured the fullscreen pty; restart so it uses half size.
+        run(["pkill", "-x", "ttfx"], check=False)
+        return True
+    return False
 
 
 def constrain_screensaver(state: dict, address: str | None = None) -> bool:
     if not bool(state.get("clamshell")):
         return True
-    want = str(address or "").lower().replace("address:", "")
-    found = False
-    placed = True
-    for client in hypr_clients():
-        if not is_screensaver(client):
-            continue
-        addr = str(client.get("address") or "")
-        if want and addr.lower().replace("address:", "") != want:
-            continue
-        found = True
-        if not place_screensaver(client, state):
-            placed = False
-    return found and placed
+    lock_path = STATE_DIR / "screensaver.lock"
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        want = str(address or "").lower().replace("address:", "")
+        found = False
+        placed = True
+        for client in hypr_clients():
+            if not is_screensaver(client):
+                continue
+            addr = str(client.get("address") or "")
+            if want and addr.lower().replace("address:", "") != want:
+                continue
+            found = True
+            if not place_screensaver(client, state):
+                placed = False
+        return found and placed
 
 
 def constrain_fullscreen(state: dict, address: str | None = None) -> None:
@@ -416,8 +480,8 @@ def constrain_fullscreen(state: dict, address: str | None = None) -> None:
     keyboard. Internal maximize (1) respects reserved_area; client=2 still
     tells YouTube/Chromium they are fullscreen.
 
-    The Omarchy screensaver is supposed to be covering fullscreen (no bar,
-    no gaps). Leave it alone: the Overlay keyboard mask sits above it.
+    The screensaver is handled separately: it stays floating so the layout
+    does not reflow, then is sized to the visible half.
     """
     clamshell = bool(state.get("clamshell"))
     want = str(address or "").lower().replace("address:", "")
