@@ -15,7 +15,7 @@ It treats the folding OLED as a real posture, not just a rotated monitor: any of
 - Reserves that lower region so tiled windows cannot sit under the keys
 - Insets full-screen overlays (Omarchy menu, clipboard, emoji picker, OSD, …) into the same usable half so they center on the active area, not the physical OLED
 - Turns client fullscreen (YouTube, Super+F) into maximize-inside-the-half: the app still thinks it is fullscreen, Hyprland keeps the reserved keyboard region
-- Fits the Omarchy screensaver by maximizing it into that working area (not a hand-placed floating window)
+- Runs the Omarchy screensaver as a borderless window filling the visible half (bar hidden for that time) and tells the app it is fullscreen so TTE centers in the active area
 
 There is no xrandr-style crop on this panel. The Wayland equivalent is `hl.monitor({ mode = "…" })`, but the OLED only advertises `2024×2560@60`, and Intel’s scaler can only Full / Center / Full-aspect a smaller mode — it cannot pin a half-height framebuffer to the top. So clamshell is a compositor reserved region plus a true-black overlay, not a different video mode.
 - Paints the covered half true black (`#000000`) on an Overlay layer so those OLED pixels turn off

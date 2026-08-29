@@ -24,6 +24,8 @@ Item {
   property string statusIcon: "󰹑"
   property string pendingCommand: ""
   property var screensaverWindows: ({})
+  property bool barHiddenByScreensaver: false
+  property bool barHiddenBeforeScreensaver: false
   readonly property int reservedLogical: {
     if (!clamshell)
       return 0
@@ -120,7 +122,7 @@ Item {
 
   Timer {
     id: ssRetry
-    interval: 100
+    interval: 80
     repeat: true
     property int left: 0
     onTriggered: {
@@ -158,6 +160,26 @@ Item {
     var n = 0
     for (var key in root.screensaverWindows) if (root.screensaverWindows[key]) n++
     return n > 0
+  }
+
+  function hideBarForScreensaver() {
+    if (!root.clamshell || !root.shell || !root.shell.bar)
+      return
+    if (!("barHidden" in root.shell.bar))
+      return
+    if (!root.barHiddenByScreensaver) {
+      root.barHiddenBeforeScreensaver = root.shell.bar.barHidden === true
+      root.barHiddenByScreensaver = true
+    }
+    root.shell.bar.barHidden = true
+  }
+
+  function restoreBarAfterScreensaver() {
+    if (!root.barHiddenByScreensaver)
+      return
+    root.barHiddenByScreensaver = false
+    if (root.shell && root.shell.bar && "barHidden" in root.shell.bar)
+      root.shell.bar.barHidden = root.barHiddenBeforeScreensaver
   }
 
   function layerNamespace(item) {
@@ -314,9 +336,10 @@ Item {
       next[String(parts[0] || "")] = true
       root.screensaverWindows = next
       if (root.clamshell) {
+        root.hideBarForScreensaver()
         ssProc.command = [root.script, "constrain-screensaver", String(parts[0] || "")]
         ssProc.running = true
-        ssRetry.left = 6
+        ssRetry.left = 8
         ssRetry.restart()
       }
     } else if (name === "closewindow") {
@@ -325,6 +348,8 @@ Item {
         var cleared = Object.assign({}, root.screensaverWindows)
         delete cleared[address]
         root.screensaverWindows = cleared
+        if (!root.screensaverOpen())
+          root.restoreBarAfterScreensaver()
         restoreTimer.restart()
       }
     } else if (name === "monitoradded" || name === "configreloaded") {
@@ -422,6 +447,7 @@ Item {
       WlrLayershell.layer: WlrLayer.Overlay
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
       exclusionMode: ExclusionMode.Ignore
+      aboveWindows: true
     }
   }
 }
