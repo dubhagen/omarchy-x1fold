@@ -43,7 +43,15 @@ BarWidget {
   }
 
   readonly property string glyph: panelLoader.item && panelLoader.item.statusIcon ? panelLoader.item.statusIcon : "󰹑"
-  readonly property string tip: panelLoader.item && panelLoader.item.statusLabel ? panelLoader.item.statusLabel : "X1 Fold"
+  readonly property string tip: {
+    var item = panelLoader.item
+    if (!item)
+      return "X1 Fold"
+    var label = item.statusLabel || "X1 Fold"
+    if (item.clamshell)
+      return label + " · Clamshell"
+    return label
+  }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
