@@ -317,54 +317,28 @@ def is_screensaver(client: dict) -> bool:
     return str(client.get("class") or "") == SCREENSAVER_CLASS
 
 
-def screensaver_rect(mon: dict, state: dict) -> tuple[int, int, int, int]:
-    """Cover the active OLED half, including the bar; leave the keyboard black."""
-    transform = int(state.get("transform") or 0) % 4
-    lw, lh = logical_size(mon, transform)
-    bottom = reserved_bottom(
-        mon,
-        transform,
-        True,
-        float(state.get("cover_ratio") or 0.50),
-        int(state.get("overlap_px") or 0),
-    )
-    x = int(mon.get("x") or 0)
-    y = int(mon.get("y") or 0)
-    return x, y, lw, max(1, lh - bottom)
-
-
-def client_xywh(client: dict) -> tuple[int, int, int, int]:
-    at = client.get("at") or [0, 0]
-    size = client.get("size") or [0, 0]
-    return int(at[0]), int(at[1]), int(size[0]), int(size[1])
-
-
 def place_screensaver(client: dict, state: dict) -> bool:
+    """Let Hyprland maximize into the reserved working area.
+
+    Pixel move/resize of a floating window fights scale and gaps and lands
+    as a small tile in the corner. Maximized (internal=1) is the compositor
+    filling the usable half, the same region tiled windows already use.
+    """
     addr = str(client.get("address") or "")
     if not addr:
         return False
-    try:
-        mon = pick_monitor(state)
-    except SystemExit:
-        return False
-    x, y, w, h = screensaver_rect(mon, state)
-    cx, cy, cw, ch = client_xywh(client)
-    internal = int(client.get("fullscreen") or 0)
-    placed = (
-        abs(cx - x) <= 2
-        and abs(cy - y) <= 2
-        and abs(cw - w) <= 4
-        and abs(ch - h) <= 4
-        and internal == 0
-    )
-    if placed:
-        return True
     sel = window_selector(addr)
-    if internal:
+    internal = int(client.get("fullscreen") or 0)
+    floating = bool(client.get("floating"))
+    if (not floating) and internal == 1:
+        return True
+    if internal == 2:
         dispatch_fullscreen_state(addr, 0, 0)
-    dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
-    dispatch_lua(f'hl.dsp.window.move({{ x = {x}, y = {y}, window = "{sel}" }})')
-    dispatch_lua(f'hl.dsp.window.resize({{ x = {w}, y = {h}, window = "{sel}" }})')
+    if floating:
+        dispatch_lua(f'hl.dsp.window.float({{ action = "unset", window = "{sel}" }})')
+    dispatch_lua(
+        f'hl.dsp.window.fullscreen({{ mode = "maximized", action = "set", window = "{sel}" }})'
+    )
     return False
 
 
@@ -391,8 +365,8 @@ def constrain_fullscreen(state: dict, address: str | None = None) -> None:
 
     Hyprland fullscreen (internal=2) covers the whole OLED, including the
     keyboard. Internal maximize (1) respects reserved_area; client=2 still
-    tells YouTube/Chromium they are fullscreen. The Omarchy screensaver is a
-    floating terminal, so it is moved/resized instead.
+    tells YouTube/Chromium they are fullscreen. The screensaver is a floating
+    terminal: unfloat it and maximize into the same working area.
     """
     clamshell = bool(state.get("clamshell"))
     want = str(address or "").lower().replace("address:", "")
