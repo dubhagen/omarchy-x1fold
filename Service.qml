@@ -24,6 +24,17 @@ Item {
   property string statusIcon: "󰹑"
   property string pendingCommand: ""
   property var screensaverWindows: ({})
+  readonly property int reservedLogical: {
+    if (!clamshell)
+      return 0
+    var screens = Quickshell.screens
+    for (var i = 0; i < screens.length; i++) {
+      var sc = screens[i]
+      if (String(sc.name || "").indexOf("eDP") === 0)
+        return Math.max(0, Math.round(sc.height * coverRatio) + overlapPx)
+    }
+    return 0
+  }
 
   function refreshFromText(text) {
     try {
@@ -99,10 +110,174 @@ Item {
     command: [root.script, "apply", "--quiet"]
   }
 
+  Process {
+    id: fsProc
+  }
+
+  Timer {
+    id: overlayTimer
+    interval: 80
+    repeat: false
+    onTriggered: root.constrainOverlays()
+  }
+
+  Timer {
+    id: overlayWatch
+    interval: 750
+    repeat: true
+    running: root.clamshell
+    onTriggered: root.constrainOverlays()
+  }
+
   function screensaverOpen() {
     var n = 0
     for (var key in root.screensaverWindows) if (root.screensaverWindows[key]) n++
     return n > 0
+  }
+
+  function layerNamespace(item) {
+    try {
+      if (item && item.WlrLayershell && item.WlrLayershell.namespace)
+        return String(item.WlrLayershell.namespace)
+    } catch (e) {}
+    return ""
+  }
+
+  function layerIsBackground(item) {
+    try {
+      return item && item.WlrLayershell && item.WlrLayershell.layer === WlrLayer.Background
+    } catch (e) {}
+    return false
+  }
+
+  function skipOverlay(item) {
+    var ns = root.layerNamespace(item)
+    if (ns === "mattd-x1fold-mask" || ns === "omarchy-background" || ns === "omarchy-bar")
+      return true
+    if (ns.indexOf("lock") !== -1 || ns.indexOf("screensaver") !== -1)
+      return true
+    if (root.layerIsBackground(item))
+      return true
+    return false
+  }
+
+  function constrainOneOverlay(item) {
+    if (!item)
+      return
+    var inset = root.reservedLogical
+    root.nudgeOverlayCard(item, inset)
+    if (item.exclusionMode === undefined || !item.anchors)
+      return
+    if (!item.anchors.top || !item.anchors.bottom)
+      return
+    if (root.skipOverlay(item))
+      return
+    if ("cardTop" in item) {
+      if (!inset) {
+        if (item.cardTop !== -1)
+          item.cardTop = -1
+      } else {
+        var cardH = 0
+        try {
+          var kids = item.children
+          for (var i = 0; i < kids.length; i++) {
+            var k = kids[i]
+            if (k && k.height > 80 && k.width > 80 && k.height < item.height - 40)
+              cardH = Math.max(cardH, k.height)
+          }
+        } catch (e) {}
+        if (!cardH)
+          cardH = Math.min(480, Math.round((item.height - inset) * 0.55))
+        var usable = Math.max(0, item.height - inset)
+        var top = Math.max(12, Math.round((usable - cardH) / 2))
+        if (item.cardTop !== top)
+          item.cardTop = top
+      }
+    }
+    if (item.margins === undefined)
+      return
+    var m = item.margins
+    if (m.bottom === inset)
+      return
+    try {
+      item.margins = {
+        left: m.left || 0,
+        right: m.right || 0,
+        top: m.top || 0,
+        bottom: inset
+      }
+    } catch (e) {}
+  }
+
+  function nudgeOverlayCard(item, inset) {
+    if (!item)
+      return
+    try {
+      if (item.anchors && item.anchors.centerIn) {
+        var off = inset ? -Math.round(inset / 2) : 0
+        if (item.anchors.verticalCenterOffset !== off)
+          item.anchors.verticalCenterOffset = off
+      }
+    } catch (e) {}
+    try {
+      if (item.anchors && item.anchors.bottom && !item.anchors.top && !item.anchors.centerIn) {
+        if (item._x1foldBaseBM === undefined)
+          item._x1foldBaseBM = item.anchors.bottomMargin || 0
+        var want = item._x1foldBaseBM + inset
+        if (item.anchors.bottomMargin !== want)
+          item.anchors.bottomMargin = want
+      }
+    } catch (e) {}
+  }
+
+  function visitPluginTree(item, fn) {
+    if (!item)
+      return
+    var seen = []
+    function visit(node, depth) {
+      if (!node || depth > 5 || seen.length > 80)
+        return
+      for (var s = 0; s < seen.length; s++)
+        if (seen[s] === node)
+          return
+      seen.push(node)
+      try { fn(node) } catch (e) {}
+      var lists = []
+      try { if (node.children) lists.push(node.children) } catch (e) {}
+      // PanelWindow is a Window, so it lives in `data` of the plugin root,
+      // not in the Item children list of the same scene.
+      if (depth === 0) {
+        try { if (node.data) lists.push(node.data) } catch (e) {}
+      }
+      for (var li = 0; li < lists.length; li++) {
+        var list = lists[li]
+        var n = list.length
+        for (var i = 0; i < n; i++)
+          visit(list[i], depth + 1)
+      }
+    }
+    visit(item, 0)
+  }
+
+  function eachPluginRoot(fn) {
+    if (!root.shell)
+      return
+    var loaders = root.shell.panelLoaders || {}
+    for (var id in loaders) {
+      if (loaders[id] && loaders[id].item)
+        fn(loaders[id].item)
+    }
+    if (typeof root.shell.serviceFor === "function") {
+      var services = ["omarchy.notifications", "omarchy.osd"]
+      for (var si = 0; si < services.length; si++)
+        fn(root.shell.serviceFor(services[si]))
+    }
+  }
+
+  function constrainOverlays() {
+    root.eachPluginRoot(function(pluginRoot) {
+      root.visitPluginTree(pluginRoot, function(node) { root.constrainOneOverlay(node) })
+    })
   }
 
   function handleHyprlandEvent(event) {
@@ -123,8 +298,19 @@ Item {
       }
     } else if (name === "monitoradded" || name === "configreloaded") {
       restoreTimer.restart()
+    } else if (name === "fullscreen") {
+      if (root.clamshell && String(parts[1] || "") === "1") {
+        fsProc.command = [root.script, "constrain-fullscreen", String(parts[0] || "")]
+        fsProc.running = true
+      }
+    } else if (name === "openlayer" || name === "createlayer") {
+      overlayTimer.restart()
     }
   }
+
+  onClamshellChanged: overlayTimer.restart()
+  onCoverRatioChanged: overlayTimer.restart()
+  onOverlapPxChanged: overlayTimer.restart()
 
   Timer {
     id: restoreTimer
@@ -141,6 +327,7 @@ Item {
   Component.onCompleted: {
     startDaemon()
     applyProc.running = true
+    overlayTimer.restart()
   }
 
   IpcHandler {
