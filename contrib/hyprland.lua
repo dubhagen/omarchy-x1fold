@@ -2,7 +2,9 @@
 hl.layer_rule({ match = { namespace = "mattd-x1fold-mask" }, no_anim = true, animation = "none" })
 hl.layer_rule({ match = { namespace = "^(squeekboard|osksqueekboard)$" }, no_anim = true })
 hl.env("SQUEEKBOARD_FORCE", "1")
--- Screensaver is a covering-fullscreen terminal; drop chrome if it is not.
+-- Clamshell: never map covering-fullscreen (that uses the whole OLED).
+-- Size/move are refreshed from `x1fold apply` so TTE measures the half-size
+-- pty on the first start instead of flashing full-panel then shrinking.
 hl.window_rule({
   name = "mattd.x1fold-screensaver",
   match = { class = "org.omarchy.screensaver" },
@@ -13,4 +15,5 @@ hl.window_rule({
   no_max_size = true,
   no_anim = true,
   float = true,
+  fullscreen = false,
 })

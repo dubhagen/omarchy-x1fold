@@ -192,36 +192,30 @@ Item {
   }
 
   function hideBarForScreensaver() {
-    if (!root.clamshell || !root.shell || !root.shell.bar)
+    if (!root.clamshell)
       return
-    // barHidden parks the surface off-screen. It also binds exclusionMode to
-    // Ignore, which reflows tiled windows. Put Auto back so the reserved
-    // strip stays while the bar is invisible.
-    if (!root.barHiddenByScreensaver) {
-      root.barHiddenBeforeScreensaver = root.shell.bar.barHidden === true
-      root.barHiddenByScreensaver = true
+    // Opacity only. barHidden drops the exclusive zone and reflows tiles.
+    root.barHiddenByScreensaver = true
+    function hide(node) {
+      if (root.layerNamespace(node) === "omarchy-bar" && node.opacity !== undefined)
+        node.opacity = 0
     }
-    if ("barHidden" in root.shell.bar)
-      root.shell.bar.barHidden = true
-    Qt.callLater(function() {
-      root.eachBarPanel(function(panel) {
-        panel.exclusionMode = ExclusionMode.Auto
-        if (panel.opacity !== undefined)
-          panel.opacity = 0
-      })
-    })
+    root.eachBarPanel(hide)
+    if (root.shell)
+      root.visitPluginTree(root.shell, hide)
   }
 
   function restoreBarAfterScreensaver() {
     if (!root.barHiddenByScreensaver)
       return
     root.barHiddenByScreensaver = false
-    if (root.shell && root.shell.bar && "barHidden" in root.shell.bar)
-      root.shell.bar.barHidden = root.barHiddenBeforeScreensaver
-    root.eachBarPanel(function(panel) {
-      if (panel.opacity !== undefined)
-        panel.opacity = 1
-    })
+    function show(node) {
+      if (root.layerNamespace(node) === "omarchy-bar" && node.opacity !== undefined)
+        node.opacity = 1
+    }
+    root.eachBarPanel(show)
+    if (root.shell)
+      root.visitPluginTree(root.shell, show)
   }
 
   function layerNamespace(item) {
@@ -254,48 +248,78 @@ Item {
     if (!item)
       return
     var inset = root.reservedLogical
-    root.nudgeOverlayCard(item, inset)
-    if (item.exclusionMode === undefined || !item.anchors)
+    var shelled = root.applyShellInset(item)
+    if (shelled) {
+      if ("cardTop" in item && item.cardTop !== -1)
+        item.cardTop = -1
       return
-    if (!item.anchors.top || !item.anchors.bottom)
-      return
-    if (root.skipOverlay(item))
-      return
-    if ("cardTop" in item) {
-      if (!inset) {
-        if (item.cardTop !== -1)
-          item.cardTop = -1
-      } else {
-        var cardH = 0
-        try {
-          var kids = item.children
-          for (var i = 0; i < kids.length; i++) {
-            var k = kids[i]
-            if (k && k.height > 80 && k.width > 80 && k.height < item.height - 40)
-              cardH = Math.max(cardH, k.height)
-          }
-        } catch (e) {}
-        if (!cardH)
-          cardH = Math.min(480, Math.round((item.height - inset) * 0.55))
-        var usable = Math.max(0, item.height - inset)
-        var top = Math.max(12, Math.round((usable - cardH) / 2))
-        if (item.cardTop !== top)
-          item.cardTop = top
-      }
     }
-    if (item.margins === undefined)
+    root.nudgeOverlayCard(item, inset)
+    if (!("cardTop" in item))
       return
-    var m = item.margins
-    if (m.bottom === inset)
+    if (!inset) {
+      if (item.cardTop !== -1)
+        item.cardTop = -1
       return
+    }
+    var cardH = 0
     try {
-      item.margins = {
-        left: m.left || 0,
-        right: m.right || 0,
-        top: m.top || 0,
-        bottom: inset
+      var kids = item.children
+      for (var i = 0; i < kids.length; i++) {
+        var k = kids[i]
+        if (k && k.height > 80 && k.width > 80 && k.height < item.height - 40)
+          cardH = Math.max(cardH, k.height)
       }
     } catch (e) {}
+    if (!cardH)
+      cardH = Math.min(480, Math.round((item.height - inset) * 0.55))
+    var usable = Math.max(0, item.height - inset)
+    var top = Math.max(12, Math.round((usable - cardH) / 2))
+    if (item.cardTop !== top)
+      item.cardTop = top
+  }
+
+  function applyShellInset(item) {
+    if (item.exclusionMode === undefined || !item.anchors)
+      return false
+    if (root.skipOverlay(item))
+      return false
+    var a = item.anchors
+    var fullBleed = (a.top && a.bottom && a.left && a.right) || item._x1foldShell === true
+    if (!fullBleed)
+      return false
+    var screenH = item.screen && item.screen.height ? item.screen.height : 0
+    if (!screenH)
+      return false
+    var inset = root.reservedLogical
+    var usable = Math.max(1, screenH - inset)
+    item._x1foldShell = true
+    try {
+      if (inset > 0) {
+        item.anchors = { top: true, bottom: false, left: true, right: true }
+        if (item.implicitHeight !== undefined)
+          item.implicitHeight = usable
+        if (item.height !== undefined)
+          item.height = usable
+        try {
+          if (typeof item.setMargins === "function")
+            item.setMargins({ left: 0, right: 0, top: 0, bottom: inset })
+          else
+            item.margins = { left: 0, right: 0, top: 0, bottom: inset }
+        } catch (e2) {}
+        return Math.abs(item.height - usable) <= 8
+      }
+      item.anchors = { top: true, bottom: true, left: true, right: true }
+      try {
+        if (typeof item.setMargins === "function")
+          item.setMargins({ left: 0, right: 0, top: 0, bottom: 0 })
+        else
+          item.margins = { left: 0, right: 0, top: 0, bottom: 0 }
+      } catch (e3) {}
+      return true
+    } catch (e) {
+      return false
+    }
   }
 
   function nudgeOverlayCard(item, inset) {
@@ -361,6 +385,8 @@ Item {
       for (var si = 0; si < services.length; si++)
         fn(root.shell.serviceFor(services[si]))
     }
+    if (root.shell.bar)
+      fn(root.shell.bar)
   }
 
   function constrainOverlays() {
@@ -378,6 +404,7 @@ Item {
       next[String(parts[0] || "")] = true
       root.screensaverWindows = next
       if (root.clamshell) {
+        root.hideBarForScreensaver()
         ssProc.command = [root.script, "constrain-screensaver", String(parts[0] || "")]
         ssProc.running = true
         ssRetry.left = 20
@@ -472,6 +499,27 @@ Item {
     function apply(): string {
       root.runCmd(["apply"])
       return "ok"
+    }
+
+    function usableArea(): string {
+      var w = 0
+      var h = 0
+      var screens = Quickshell.screens
+      for (var i = 0; i < screens.length; i++) {
+        var sc = screens[i]
+        if (String(sc.name || "").indexOf("eDP") === 0) {
+          w = sc.width
+          h = sc.height
+          break
+        }
+      }
+      var inset = root.reservedLogical
+      return JSON.stringify({
+        clamshell: root.clamshell,
+        insetBottom: inset,
+        width: w,
+        height: Math.max(0, h - inset)
+      })
     }
   }
 

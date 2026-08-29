@@ -253,6 +253,29 @@ def sync_arrange_transform(mon: dict, transform: int) -> None:
         MONITORS_LUA.write_text(updated)
 
 
+def eval_screensaver_rule(state: dict, mon: dict, bottom: int) -> None:
+    """Map the screensaver at half size so TTE never sees the full pty."""
+    clamshell = bool(state.get("clamshell"))
+    if clamshell:
+        lw, lh = logical_size(mon, int(state.get("transform") or 0) % 4)
+        w, h = lw + 2, max(1, lh - int(bottom))
+        extra = f"fullscreen = false, size = {{ {w}, {h} }}, move = {{ -1, 0 }}, "
+    else:
+        extra = "fullscreen = true, "
+    lua = (
+        "hl.window_rule({ "
+        'name = "mattd.x1fold-screensaver", '
+        'match = { class = "org.omarchy.screensaver" }, '
+        "decorate = false, rounding = 0, no_shadow = true, border_size = 0, "
+        "no_max_size = true, no_anim = true, float = true, "
+        f"{extra}}})"
+    )
+    try:
+        run(["hyprctl", "eval", lua], check=False)
+    except FileNotFoundError:
+        pass
+
+
 def reserved_bottom(mon: dict, transform: int, clamshell: bool, ratio: float, overlap: int) -> int:
     if not clamshell or not is_portrait(transform):
         return 0
@@ -275,6 +298,7 @@ def apply(state: dict, quiet: bool = False) -> dict:
     eval_monitor(lua)
     persist_lua(lua)
     sync_arrange_transform(mon, transform)
+    eval_screensaver_rule(state, mon, bottom)
     save_state(state)
     if clamshell:
         set_osk(False, persist=False)

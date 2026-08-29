@@ -15,9 +15,12 @@ It treats the folding OLED as a real posture, not just a rotated monitor: any of
 - Reserves that lower region so tiled windows cannot sit under the keys
 - Insets full-screen overlays (Omarchy menu, clipboard, emoji picker, OSD, …) into the same usable half so they center on the active area, not the physical OLED
 - Turns client fullscreen (YouTube, Super+F) into maximize-inside-the-half: the app still thinks it is fullscreen, Hyprland keeps the reserved keyboard region
-- After the screensaver maps, shrinks it as a **floating** window to the visible half (Hyprland covering-fullscreen always uses the whole output, so reserved_area cannot apply). Then restarts TTE so it measures that size. Floating means dwindle does not reflow your other windows.
+- Maps the screensaver as a floating half-height window (a named Hyprland rule, so it never flashes covering-fullscreen). TTE then measures the visible pty. Other windows stay put because it never joins dwindle.
+- Insets Quickshell overlay surfaces (menu, theme/wallpaper picker, clipboard, …) to the same usable half so they center on the viewable area. Other plugins can read `omarchy-shell mattd.x1fold usableArea`.
 
 There is no xrandr-style crop on this panel. The Wayland equivalent is `hl.monitor({ mode = "…" })`, but the OLED only advertises `2024×2560@60`, and Intel’s scaler can only Full / Center / Full-aspect a smaller mode — it cannot pin a half-height framebuffer to the top. So clamshell is a compositor reserved region plus a true-black overlay, not a different video mode.
+
+Covering fullscreen always uses the whole output; `reserved_area` does not apply to it. The screensaver therefore maps already sized to the visible half via a window rule, instead of going fullscreen and hoping Hyprland clips it.
 - Paints the covered half true black (`#000000`) on an Overlay layer so those OLED pixels turn off
 - Swallows input on the covered half
 - Turns the on-screen keyboard off (you already have hardware keys)
