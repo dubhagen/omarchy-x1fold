@@ -114,6 +114,31 @@ Item {
     id: fsProc
   }
 
+  Process {
+    id: ssProc
+  }
+
+  Timer {
+    id: ssRetry
+    interval: 100
+    repeat: true
+    property int left: 0
+    onTriggered: {
+      if (!root.clamshell || left <= 0) {
+        stop()
+        left = 0
+        return
+      }
+      left -= 1
+      if (!ssProc.running) {
+        ssProc.command = [root.script, "constrain-screensaver"]
+        ssProc.running = true
+      }
+      if (left <= 0)
+        stop()
+    }
+  }
+
   Timer {
     id: overlayTimer
     interval: 80
@@ -288,6 +313,12 @@ Item {
       var next = Object.assign({}, root.screensaverWindows)
       next[String(parts[0] || "")] = true
       root.screensaverWindows = next
+      if (root.clamshell) {
+        ssProc.command = [root.script, "constrain-screensaver", String(parts[0] || "")]
+        ssProc.running = true
+        ssRetry.left = 6
+        ssRetry.restart()
+      }
     } else if (name === "closewindow") {
       var address = String(parts[0] || "")
       if (root.screensaverWindows[address]) {

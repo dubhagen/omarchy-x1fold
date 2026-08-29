@@ -15,6 +15,7 @@ It treats the folding OLED as a real posture, not just a rotated monitor: any of
 - Reserves that lower region so tiled windows cannot sit under the keys
 - Insets full-screen overlays (Omarchy menu, clipboard, emoji picker, OSD, …) into the same usable half so they center on the active area, not the physical OLED
 - Turns client fullscreen (YouTube, Super+F) into maximize-inside-the-half: the app still thinks it is fullscreen, Hyprland keeps the reserved keyboard region
+- Fits the Omarchy screensaver (a floating fullscreen terminal) to the same usable half so the TTE effect does not run under the keyboard
 - Paints the covered half true black (`#000000`) on an Overlay layer so those OLED pixels turn off
 - Swallows input on the covered half
 - Turns the on-screen keyboard off (you already have hardware keys)

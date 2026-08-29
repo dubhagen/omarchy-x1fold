@@ -13,6 +13,7 @@ Commands:
   tablet               full panel (clamshell off)
   apply
   constrain-fullscreen [address]
+  constrain-screensaver [address]
   daemon
 """
 
@@ -292,16 +293,97 @@ def hypr_clients() -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def dispatch_fullscreen_state(address: str, internal: int, client: int) -> None:
-    addr = address if str(address).startswith("address:") else f"address:{address}"
-    lua = (
-        f'hl.dsp.window.fullscreen_state({{ internal = {int(internal)}, '
-        f'client = {int(client)}, action = "set", window = "{addr}" }})'
-    )
+def dispatch_lua(lua: str) -> None:
     try:
         run(["hyprctl", "dispatch", lua], check=False)
     except FileNotFoundError:
         pass
+
+
+def window_selector(address: str) -> str:
+    addr = str(address)
+    return addr if addr.startswith("address:") else f"address:{addr}"
+
+
+def dispatch_fullscreen_state(address: str, internal: int, client: int) -> None:
+    sel = window_selector(address)
+    dispatch_lua(
+        f'hl.dsp.window.fullscreen_state({{ internal = {int(internal)}, '
+        f'client = {int(client)}, action = "set", window = "{sel}" }})'
+    )
+
+
+def is_screensaver(client: dict) -> bool:
+    return str(client.get("class") or "") == SCREENSAVER_CLASS
+
+
+def screensaver_rect(mon: dict, state: dict) -> tuple[int, int, int, int]:
+    """Cover the active OLED half, including the bar; leave the keyboard black."""
+    transform = int(state.get("transform") or 0) % 4
+    lw, lh = logical_size(mon, transform)
+    bottom = reserved_bottom(
+        mon,
+        transform,
+        True,
+        float(state.get("cover_ratio") or 0.50),
+        int(state.get("overlap_px") or 0),
+    )
+    x = int(mon.get("x") or 0)
+    y = int(mon.get("y") or 0)
+    return x, y, lw, max(1, lh - bottom)
+
+
+def client_xywh(client: dict) -> tuple[int, int, int, int]:
+    at = client.get("at") or [0, 0]
+    size = client.get("size") or [0, 0]
+    return int(at[0]), int(at[1]), int(size[0]), int(size[1])
+
+
+def place_screensaver(client: dict, state: dict) -> bool:
+    addr = str(client.get("address") or "")
+    if not addr:
+        return False
+    try:
+        mon = pick_monitor(state)
+    except SystemExit:
+        return False
+    x, y, w, h = screensaver_rect(mon, state)
+    cx, cy, cw, ch = client_xywh(client)
+    internal = int(client.get("fullscreen") or 0)
+    placed = (
+        abs(cx - x) <= 2
+        and abs(cy - y) <= 2
+        and abs(cw - w) <= 4
+        and abs(ch - h) <= 4
+        and internal == 0
+    )
+    if placed:
+        return True
+    sel = window_selector(addr)
+    if internal:
+        dispatch_fullscreen_state(addr, 0, 0)
+    dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
+    dispatch_lua(f'hl.dsp.window.move({{ x = {x}, y = {y}, window = "{sel}" }})')
+    dispatch_lua(f'hl.dsp.window.resize({{ x = {w}, y = {h}, window = "{sel}" }})')
+    return False
+
+
+def constrain_screensaver(state: dict, address: str | None = None) -> bool:
+    if not bool(state.get("clamshell")):
+        return True
+    want = str(address or "").lower().replace("address:", "")
+    found = False
+    placed = True
+    for client in hypr_clients():
+        if not is_screensaver(client):
+            continue
+        addr = str(client.get("address") or "")
+        if want and addr.lower().replace("address:", "") != want:
+            continue
+        found = True
+        if not place_screensaver(client, state):
+            placed = False
+    return found and placed
 
 
 def constrain_fullscreen(state: dict, address: str | None = None) -> None:
@@ -309,7 +391,8 @@ def constrain_fullscreen(state: dict, address: str | None = None) -> None:
 
     Hyprland fullscreen (internal=2) covers the whole OLED, including the
     keyboard. Internal maximize (1) respects reserved_area; client=2 still
-    tells YouTube/Chromium they are fullscreen.
+    tells YouTube/Chromium they are fullscreen. The Omarchy screensaver is a
+    floating terminal, so it is moved/resized instead.
     """
     clamshell = bool(state.get("clamshell"))
     want = str(address or "").lower().replace("address:", "")
@@ -318,6 +401,12 @@ def constrain_fullscreen(state: dict, address: str | None = None) -> None:
         if not addr:
             continue
         if want and addr.lower().replace("address:", "") != want:
+            continue
+        if is_screensaver(client):
+            if clamshell:
+                place_screensaver(client, state)
+            elif int(client.get("fullscreen") or 0) != 2:
+                dispatch_fullscreen_state(addr, 2, 2)
             continue
         internal = int(client.get("fullscreen") or 0)
         client_fs = int(client.get("fullscreenClient") or 0)
@@ -329,6 +418,11 @@ def constrain_fullscreen(state: dict, address: str | None = None) -> None:
 
 def cmd_constrain_fullscreen(state: dict, address: str | None = None) -> int:
     constrain_fullscreen(state, address)
+    return 0
+
+
+def cmd_constrain_screensaver(state: dict, address: str | None = None) -> int:
+    constrain_screensaver(state, address)
     return 0
 
 
@@ -755,6 +849,8 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "constrain-fullscreen":
         return cmd_constrain_fullscreen(state, args[1] if len(args) > 1 else None)
+    if cmd == "constrain-screensaver":
+        return cmd_constrain_screensaver(state, args[1] if len(args) > 1 else None)
     if cmd == "daemon":
         return cmd_daemon(state)
     fail(f"unknown command: {cmd}\n{usage()}")
