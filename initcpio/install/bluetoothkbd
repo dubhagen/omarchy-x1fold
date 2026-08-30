@@ -16,6 +16,21 @@ build() {
 		add_module "$mod"
 	done
 
+	# btintel picks the CNVi blob at runtime from chip OTP (ibt-VVVV-PPPP.sfi).
+	# modinfo only lists ancient ibt-11/ibt-12 files, so add_module will not
+	# pull what this adapter actually loads. Missing firmware in the initramfs
+	# makes hci0 fail with -ENOENT during modconf, and the kernel will not
+	# retry after switch-root — Bluetooth stays dead for the whole boot.
+	if ! add_firmware intel/ibt-0040-0041.sfi intel/ibt-0040-0041.ddc; then
+		error "bluetoothkbd: missing intel/ibt-0040-0041 firmware"
+		return 1
+	fi
+	local fw
+	for fw in /usr/lib/firmware/intel/ibt-0040-*.sfi* /usr/lib/firmware/intel/ibt-0040-*.ddc*; do
+		[[ -e $fw ]] || continue
+		add_file "$fw"
+	done
+
 	for libnssfile in /usr/lib/libnss_files*; do
 		add_file "$libnssfile"
 	done

@@ -279,7 +279,11 @@ install_boot() {
     sudo sed -i 's/^#AutoEnable=true/AutoEnable=true/' /etc/bluetooth/main.conf
   fi
   log "rebuilding initramfs"
-  sudo mkinitcpio -P
+  if command -v limine-mkinitcpio >/dev/null; then
+    sudo limine-mkinitcpio
+  else
+    sudo mkinitcpio -P
+  fi
   log "Bluetooth keyboard hook installed. Reboot to use it at the LUKS prompt."
 }
 

@@ -11,7 +11,7 @@ run_hook() {
 	msg ":: Activating bluetoothd..."
 	/usr/lib/bluetooth/bluetoothd &
 	# Give the ThinkPad BLE keyboard a moment to reconnect.
-	sleep 2
+	sleep 5
 }
 
 run_cleanuphook() {

@@ -150,7 +150,7 @@ The root filesystem is encrypted. After pairing the ThinkPad keyboard in the run
 # or: ~/.config/omarchy/plugins/mattd.x1fold/bin/x1fold-install-boot-keyboard
 ```
 
-That copies a `bluetoothkbd` mkinitcpio hook (before `encrypt`), includes `/var/lib/bluetooth` pairing data, enables `AutoEnable` in `bluetoothd`, and rebuilds the initramfs. USB still works as a fallback if Bluetooth is slow to come up. Keep the keyboard in range during the passphrase prompt; it may buffer a couple of seconds of keystrokes.
+That copies a `bluetoothkbd` mkinitcpio hook (before `encrypt`), includes `/var/lib/bluetooth` pairing data, the Intel CNVi firmware this adapter loads at runtime (`intel/ibt-0040-0041.sfi`), enables `AutoEnable` in `bluetoothd`, and rebuilds the initramfs. USB still works as a fallback if Bluetooth is slow to come up. Keep the keyboard in range during the passphrase prompt; it may buffer a couple of seconds of keystrokes.
 
 ## Book mode (not implemented)
 
