@@ -1,13 +1,18 @@
 #!/usr/bin/ash
-# Runtime hook: bring up dbus + bluetoothd and reconnect the folio BLE
-# keyboard before the encrypt prompt. This keyboard is HOGP (BLE HID),
-# which needs /dev/uhid — classic hidp is not enough.
+# Runtime hook: bring up a PRIVATE dbus + bluetoothd and reconnect the
+# folio BLE keyboard before the encrypt prompt. This keyboard is HOGP
+# (BLE HID), which needs /dev/uhid — classic hidp is not enough.
 #
-# After a successful passphrase, cryptsetup waits for udev to create
-# /dev/mapper/root. systemd-udevd plus a system dbus + HOGP input events
-# can deadlock that wait, so the splash hangs forever. Disable libdevmapper
-# udev sync for the rest of the initramfs (plymouthd inherits this export)
-# and never kill dbus-daemon — udev cleanup still needs it.
+# Do not use the system bus. systemd-udevd will attach to
+# /run/dbus/system_bus_socket and then `udevadm control --exit` never
+# returns after HOGP input events — splash hangs after a good passphrase
+# even though LUKS opened /dev/mapper/root. The "Unable to resume from
+# device '/dev/mapper/root'" line is the kernel skipping hibernation
+# (no image); it is not the hang.
+
+BTBUS_DIR=/run/btbus
+BTBUS_SOCK=$BTBUS_DIR/bus
+BTBUS_CONF=$BTBUS_DIR/dbus.conf
 
 ply_msg() {
 	msg "$1"
@@ -59,7 +64,6 @@ connect_paired_hid() {
 
 keyboard_connected() {
 	ply_msg "Bluetooth keyboard connected"
-	# Leave the status on the splash through the passphrase prompt.
 	sleep 1
 }
 
@@ -69,10 +73,61 @@ drain_udev() {
 	fi
 }
 
+stop_bluetooth() {
+	if [ -f "$BTBUS_DIR/bluetoothd.pid" ]; then
+		kill "$(cat "$BTBUS_DIR/bluetoothd.pid")" 2>/dev/null || true
+	fi
+	killall bluetoothd 2>/dev/null || true
+	if [ -f "$BTBUS_DIR/dbus.pid" ]; then
+		kill "$(cat "$BTBUS_DIR/dbus.pid")" 2>/dev/null || true
+	fi
+}
+
+# Once LUKS has created the mapper, the passphrase is done — tear BlueZ
+# down so udev is idle before resume + `udevadm control --exit`.
+stop_bluetooth_after_unlock() {
+	n=0
+	while [ "$n" -lt 120 ]; do
+		if [ -b /dev/mapper/root ]; then
+			sleep 2
+			stop_bluetooth
+			drain_udev
+			return 0
+		fi
+		sleep 1
+		n=$((n + 1))
+	done
+}
+
+start_private_bus() {
+	mkdir -p "$BTBUS_DIR" /run/sdp
+	cat > "$BTBUS_CONF" << 'EOF'
+<busconfig>
+  <type>system</type>
+  <keep_umask/>
+  <listen>unix:path=/run/btbus/bus</listen>
+  <auth>EXTERNAL</auth>
+  <allow_anonymous/>
+  <policy context="default">
+    <allow send_destination="*"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+    <allow user="*"/>
+  </policy>
+</busconfig>
+EOF
+	/usr/bin/dbus-daemon --config-file="$BTBUS_CONF" --nofork --nopidfile &
+	echo $! > "$BTBUS_DIR/dbus.pid"
+	export DBUS_SYSTEM_BUS_ADDRESS="unix:path=$BTBUS_SOCK"
+	n=0
+	while [ ! -S "$BTBUS_SOCK" ] && [ "$n" -lt 20 ]; do
+		sleep 1
+		n=$((n + 1))
+	done
+}
+
 run_earlyhook() {
 	# Must be exported before plymouthd starts (plymouth run_hook).
-	# plymouth ask-for-password then runs cryptsetup in plymouthd, which
-	# inherits this so it will mknod /dev/mapper/root itself.
 	export DM_DISABLE_UDEV=1
 	mkdir -p /usr/local/bin
 	if [ ! -e /usr/local/bin/cryptsetup ]; then
@@ -80,18 +135,19 @@ run_earlyhook() {
 		chmod 755 /usr/local/bin/cryptsetup
 	fi
 
-	msg ":: Activating dbus..."
-	mkdir -p /run/dbus /run/sdp
 	ensure_uhid
-	/usr/bin/dbus-daemon --system --syslog-only
+	msg ":: Activating private bluetooth dbus..."
+	start_private_bus
 }
 
 run_hook() {
+	export DBUS_SYSTEM_BUS_ADDRESS="unix:path=$BTBUS_SOCK"
 	msg ":: Activating bluetoothd..."
 	/usr/lib/bluetooth/bluetoothd &
+	echo $! > "$BTBUS_DIR/bluetoothd.pid"
 
-	# USB-C takes over this folio and BLE goes idle. Don't delay LUKS
-	# when the user already has a working USB keyboard.
+	stop_bluetooth_after_unlock &
+
 	if usb_folio_present; then
 		ply_msg "USB keyboard connected"
 		drain_udev
@@ -134,12 +190,13 @@ run_hook() {
 	drain_udev
 }
 
-run_cleanuphook() {
-	if command -v plymouth >/dev/null && plymouth --ping 2>/dev/null; then
-		plymouth hide-message || true
-	fi
-	# Do not kill dbus-daemon: systemd-udevd may be using that socket.
-	# switch_root reaps leftover bluetoothd.
-	killall bluetoothd 2>/dev/null || true
+run_latehook() {
+	stop_bluetooth
 	drain_udev
+}
+
+run_cleanuphook() {
+	stop_bluetooth
+	# Never plymouth --ping here: plymouthd can be wedged after resume
+	# skip, and the ping would hang PID 1 until you reboot.
 }

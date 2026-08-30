@@ -154,7 +154,7 @@ That copies a `bluetoothkbd` mkinitcpio hook (before `encrypt`), includes `/var/
 
 Unplug USB-C before the passphrase prompt. This folio switches to USB HID when the cable is in, and Bluetooth goes idle. With the cable out, Plymouth shows **Waiting for Bluetooth keyboard** with a countdown, then **Bluetooth keyboard connected** or **Bluetooth keyboard not connected**. That status stays on the splash through the passphrase prompt. USB still works as a fallback if you plug it in, or if Bluetooth is slow.
 
-The hook exports `DM_DISABLE_UDEV=1` so cryptsetup can create `/dev/mapper/root` without waiting on udev. Starting BlueZ HOGP on the system bus otherwise stalls udev after a good passphrase, and the splash hangs on the mapper device.
+The hook exports `DM_DISABLE_UDEV=1` so cryptsetup can create `/dev/mapper/root` without waiting on udev. BlueZ runs on a **private** D-Bus so systemd-udevd never attaches to it; after the mapper appears, bluetoothd is stopped so `udevadm control --exit` can finish. A kernel line `Unable to resume from device '/dev/mapper/root' ... continuing boot process` is normal when you did not hibernate — it is not a LUKS failure.
 
 ## Book mode (not implemented)
 
