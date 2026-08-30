@@ -1,4 +1,6 @@
 import QtQuick
+import Quickshell
+import Quickshell.Io
 import qs.Ui
 import qs.Commons
 
@@ -8,6 +10,12 @@ BarWidget {
 
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string script: pluginDir + "/bin/x1fold"
+  readonly property string home: Quickshell.env("HOME")
+  readonly property string statePath: home + "/.local/state/omarchy/x1fold/state.json"
+
+  property bool clamshell: false
+  property string statusLabel: "X1 Fold"
+  property string statusIcon: "󰹑"
 
   function injectPanel() {
     var target = panelLoader.item
@@ -42,15 +50,28 @@ BarWidget {
     if (panelLoader.item) panelLoader.item.closeForPopoutSwitch()
   }
 
-  readonly property string glyph: panelLoader.item && panelLoader.item.statusIcon ? panelLoader.item.statusIcon : "󰹑"
+  readonly property string glyph: root.statusIcon
   readonly property string tip: {
-    var item = panelLoader.item
-    if (!item)
-      return "X1 Fold"
-    var label = item.statusLabel || "X1 Fold"
-    if (item.clamshell)
+    var label = root.statusLabel || "X1 Fold"
+    if (root.clamshell)
       return label + " · Clamshell"
     return label
+  }
+
+  function applyStateText(text) {
+    try {
+      var data = JSON.parse(text || "{}")
+      root.clamshell = data.clamshell === true
+      var transform = Number(data.transform || 0)
+      var portrait = (transform % 2) === 0
+      if (data.label)
+        root.statusLabel = data.label
+      else if (portrait)
+        root.statusLabel = transform === 2 ? "Portrait (flipped)" : "Portrait"
+      else
+        root.statusLabel = transform === 1 ? "Landscape (flipped)" : "Landscape"
+      root.statusIcon = root.clamshell ? "󰌌" : (portrait ? "󰁞" : "󰹑")
+    } catch (e) {}
   }
 
   implicitWidth: button.implicitWidth
@@ -58,6 +79,14 @@ BarWidget {
 
   onBarChanged: injectPanel()
   onSettingsChanged: injectPanel()
+
+  FileView {
+    path: root.statePath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.applyStateText(text())
+  }
 
   Loader {
     id: panelLoader
@@ -67,6 +96,7 @@ BarWidget {
     onLoaded: {
       root.injectPanel()
       Qt.callLater(root.injectPanel)
+      Qt.callLater(root.refresh)
     }
   }
 

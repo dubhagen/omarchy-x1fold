@@ -28,6 +28,7 @@ Panel {
   property string statusLabel: "Landscape"
   property string statusIcon: "󰹑"
   property bool cmdBusy: false
+  readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/x1fold/state.json"
 
   readonly property string orientationValue: {
     var names = { 0: "portrait", 1: "landscape-flip", 2: "portrait-flip", 3: "landscape" }
@@ -73,6 +74,29 @@ Panel {
     root.run(["overlap", String(root.snapOverlap(root.overlapPx + delta))])
   }
 
+  function applyStateText(text) {
+    try {
+      var data = JSON.parse(text || "{}")
+      root.orientationIndex = Number(data.transform || 0)
+      root.clamshell = data.clamshell === true
+      root.autorotate = data.autorotate === true
+      root.coverRatio = root.numOr(data.cover_ratio, 0.5)
+      var sliding = false
+      try { sliding = overlapSlider.dragging === true } catch (e2) {}
+      if (!sliding)
+        root.overlapPx = root.numOr(data.overlap_px, 0)
+      root.oskOn = data.osk === true
+      var portrait = (root.orientationIndex % 2) === 0
+      if (data.label)
+        root.statusLabel = data.label
+      else if (portrait)
+        root.statusLabel = root.orientationIndex === 2 ? "Portrait (flipped)" : "Portrait"
+      else
+        root.statusLabel = root.orientationIndex === 1 ? "Landscape (flipped)" : "Landscape"
+      root.statusIcon = root.clamshell ? "󰌌" : (portrait ? "󰁞" : "󰹑")
+    } catch (e) {}
+  }
+
   function refresh() {
     if (!statusProc.running) statusProc.running = true
   }
@@ -84,6 +108,14 @@ Panel {
     for (var i = 0; i < args.length; i++) argv.push(args[i])
     cmdProc.command = argv
     cmdProc.running = true
+  }
+
+  FileView {
+    path: root.statePath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.applyStateText(text())
   }
 
   Process {
@@ -123,6 +155,8 @@ Panel {
     triggeredOnStart: true
     onTriggered: root.refresh()
   }
+
+  Component.onCompleted: root.refresh()
 
   KeyboardPanel {
     id: panel

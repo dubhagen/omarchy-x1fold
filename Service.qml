@@ -26,6 +26,9 @@ Item {
   property var screensaverWindows: ({})
   property bool barHiddenByUs: false
   property bool pendingBarSync: false
+  property bool ssDismissArmed: false
+  property bool ssDismissing: false
+  property bool ssSawIdle: false
   readonly property int reservedLogical: {
     if (!clamshell)
       return 0
@@ -118,6 +121,15 @@ Item {
 
   Process {
     id: ssProc
+  }
+
+  Process {
+    id: ssDismissProc
+    onExited: {
+      root.ssDismissing = false
+      if (!root.screensaverOpen())
+        root.restoreBarAfterFullscreen()
+    }
   }
 
   Process {
@@ -237,6 +249,21 @@ Item {
     root.barHiddenByUs = false
     root.setBarHidden(false)
     root.requestBarSync()
+  }
+
+  function dismissScreensaver() {
+    if (!root.clamshell || root.ssDismissing)
+      return
+    if (!root.screensaverOpen() && !root.barHiddenByUs)
+      return
+    root.ssDismissing = true
+    root.ssDismissArmed = false
+    root.barHiddenByUs = false
+    root.setBarHidden(false)
+    if (ssDismissProc.running)
+      return
+    ssDismissProc.command = [root.script, "dismiss-screensaver"]
+    ssDismissProc.running = true
   }
 
   function layerNamespace(item) {
@@ -633,6 +660,10 @@ Item {
       next[String(parts[0] || "")] = true
       root.screensaverWindows = next
       if (root.clamshell) {
+        root.ssDismissing = false
+        root.ssDismissArmed = false
+        root.ssSawIdle = false
+        ssArmTimer.restart()
         root.hideBarForFullscreen()
         ssProc.command = [root.script, "constrain-screensaver", String(parts[0] || "")]
         ssProc.running = true
@@ -646,7 +677,9 @@ Item {
         delete cleared[address]
         root.screensaverWindows = cleared
         if (!root.screensaverOpen()) {
-          root.restoreBarAfterFullscreen()
+          root.ssDismissArmed = false
+          if (!root.ssDismissing)
+            root.restoreBarAfterFullscreen()
           ssProc.command = [root.script, "cursor", "show"]
           ssProc.running = true
         }
@@ -691,6 +724,31 @@ Item {
     interval: 400
     repeat: false
     onTriggered: if (!root.screensaverOpen()) applyProc.running = true
+  }
+
+  Timer {
+    id: ssArmTimer
+    interval: 700
+    repeat: false
+    onTriggered: {
+      root.ssDismissArmed = root.screensaverOpen()
+      root.ssSawIdle = ssIdle.isIdle === true
+    }
+  }
+
+  IdleMonitor {
+    id: ssIdle
+    enabled: root.clamshell && root.screensaverOpen() && root.ssDismissArmed
+    timeout: 1
+    respectInhibitors: false
+    onIsIdleChanged: {
+      if (isIdle) {
+        root.ssSawIdle = true
+        return
+      }
+      if (root.ssSawIdle && root.ssDismissArmed)
+        root.dismissScreensaver()
+    }
   }
 
   Connections {

@@ -14,6 +14,7 @@ Commands:
   apply
   constrain-fullscreen [address]
   constrain-screensaver [address]
+  dismiss-screensaver
   fullscreen toggle|on|off [address]
   sync-bar
   cursor hide|show
@@ -500,6 +501,35 @@ def wait_bar_unparked(timeout: float = 0.45) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if not bar_parked():
+            return
+        time.sleep(0.02)
+
+
+def force_unpark_bar() -> None:
+    """Show the bar even while the screensaver is still mapped.
+
+    sync_bar() would keep it hidden because the saver counts as a clamshell
+    overlay. Dismiss needs the exclusive zone applied before the saver dies.
+    """
+    BAR_HIDDEN_MARKER.unlink(missing_ok=True)
+    BAR_OFF_FLAG.unlink(missing_ok=True)
+
+
+def close_screensaver_windows() -> None:
+    for client in hypr_clients():
+        if not is_screensaver(client):
+            continue
+        addr = str(client.get("address") or "")
+        if not addr:
+            continue
+        sel = window_selector(addr)
+        dispatch_lua(f'hl.dsp.window.close({{ window = "{sel}" }})')
+
+
+def wait_screensaver_gone(timeout: float = 0.4) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not screensaver_running():
             return
         time.sleep(0.02)
 
@@ -999,6 +1029,41 @@ def cmd_constrain_screensaver(state: dict, address: str | None = None) -> int:
     return 0
 
 
+def cmd_dismiss_screensaver(state: dict) -> int:
+    """Unpark the bar, wait for exclusive-zone reflow, then close the saver.
+
+    Closing first leaves tiled windows full-bleed for a frame, then the bar
+    exclusive zone shrinks them. Reveal the bar while the saver still covers
+    that reflow.
+    """
+    if not screensaver_running() and not BAR_HIDDEN_MARKER.exists():
+        restore_cursor_after_screensaver()
+        sync_bar(state)
+        return 0
+    lock_path = STATE_DIR / "ss-dismiss.lock"
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not screensaver_running() and not BAR_HIDDEN_MARKER.exists():
+            restore_cursor_after_screensaver()
+            sync_bar(load_state())
+            return 0
+        anims = animations_enabled()
+        if anims:
+            set_animations_enabled(False)
+        try:
+            force_unpark_bar()
+            wait_bar_unparked()
+            close_screensaver_windows()
+            restore_cursor_after_screensaver()
+            wait_screensaver_gone()
+        finally:
+            sync_bar(load_state())
+            if anims:
+                set_animations_enabled(True)
+    return 0
+
+
 def cmd_sync_bar(state: dict) -> int:
     hidden = sync_bar(state)
     print("hidden" if hidden else "shown")
@@ -1445,6 +1510,8 @@ def main(argv: list[str]) -> int:
         )
     if cmd == "constrain-screensaver":
         return cmd_constrain_screensaver(state, args[1] if len(args) > 1 else None)
+    if cmd == "dismiss-screensaver":
+        return cmd_dismiss_screensaver(state)
     if cmd == "sync-bar":
         return cmd_sync_bar(state)
     if cmd == "cursor":

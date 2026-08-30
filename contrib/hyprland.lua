@@ -65,14 +65,52 @@ local function x1fold_has_tag(w, name)
   return false
 end
 
+-- First key/click while the clamshell screensaver is up unparks the bar
+-- and then closes the saver. The saver would otherwise eat the key and
+-- die before the exclusive zone is restored (tiled windows jump).
+local ss_dismiss_binds = {
+  hl.bind("catchall", hl.dsp.exec_cmd(x1fold .. " dismiss-screensaver"), {
+    description = "X1 Fold: unpark bar then close screensaver",
+    dont_inhibit = true,
+  }),
+  hl.bind("mouse:272", hl.dsp.exec_cmd(x1fold .. " dismiss-screensaver"), {
+    description = "X1 Fold: dismiss screensaver",
+    mouse = true,
+    click = true,
+  }),
+  hl.bind("mouse:273", hl.dsp.exec_cmd(x1fold .. " dismiss-screensaver"), {
+    description = "X1 Fold: dismiss screensaver",
+    mouse = true,
+    click = true,
+  }),
+}
+for _, bind in ipairs(ss_dismiss_binds) do
+  bind:set_enabled(false)
+end
+
+local function x1fold_ss_binds(enabled)
+  for _, bind in ipairs(ss_dismiss_binds) do
+    bind:set_enabled(enabled)
+  end
+end
+
 hl.on("window.open", function(w)
   if w == nil or w.class ~= "org.omarchy.screensaver" then
     return
   end
   if not x1fold_clamshell(w.monitor) then
+    x1fold_ss_binds(false)
     return
   end
+  x1fold_ss_binds(true)
   hl.dispatch(hl.dsp.exec_cmd(x1fold .. " constrain-screensaver " .. tostring(w.address)))
+end)
+
+hl.on("window.close", function(w)
+  if w == nil or w.class ~= "org.omarchy.screensaver" then
+    return
+  end
+  x1fold_ss_binds(false)
 end)
 
 -- Client-initiated covering (YouTube) is remapped onto the visible half.
