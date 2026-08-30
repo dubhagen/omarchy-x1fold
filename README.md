@@ -128,7 +128,7 @@ The panel slider steps by 5 px, with − / + on either side. The same value is `
 
 ## On-screen keyboard
 
-The ThinkPad Bluetooth TrackPoint Keyboard presents as an external HID, so stock libinput will not suppress its touchpad or TrackPoint while typing. The plugin’s Hyprland device block turns disable-while-typing on those pointers, turns off tap-to-click on the tiny keyboard touchpad, and uses a slower key-repeat. `./setup.sh --boot` also installs a libinput quirk (`/etc/libinput/local-overrides.quirks`) that marks the keyboard internal so typing actually pairs with those pointers.
+The ThinkPad Bluetooth TrackPoint Keyboard presents as an external HID, so stock libinput will not suppress its touchpad or TrackPoint while typing. The plugin’s Hyprland device block turns disable-while-typing on those pointers and uses a slower key-repeat. Tap-to-click stays on. `./setup.sh --boot` also installs a libinput quirk (`/etc/libinput/local-overrides.quirks`) that marks the keyboard internal so typing actually pairs with those pointers.
 
 Squeekboard is started with the session (`SQUEEKBOARD_FORCE=1` so it is allowed on a non-phone form factor). Super+Alt+R shows or hides it.
 

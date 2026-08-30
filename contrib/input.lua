@@ -2,12 +2,12 @@
 -- Bluetooth HID is tagged external, so libinput will not suppress its
 -- touchpad / TrackPoint while typing unless we force DWT on those pointers
 -- and (via quirks) treat the keyboard as internal. Physical mouse buttons
--- sit under the spacebar; tap-to-click on the tiny keyboard touchpad is a
--- second source of stray clicks.
+-- sit under the spacebar. Disable-while-typing is what drops TrackPoint
+-- and touchpad events during keystrokes; tap-to-click stays on.
 hl.device({
   name = "x1fkeyboard-touchpad",
   disable_while_typing = true,
-  tap_to_click = false,
+  tap_to_click = true,
   natural_scroll = true,
   scroll_factor = 0.4,
 })
