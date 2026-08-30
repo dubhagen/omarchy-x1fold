@@ -11,8 +11,11 @@ build() {
 		sed -i -r -e "/${core}|${udev}/!d" "$BUILDROOT/$target"
 	done
 
+	# uhid + cmac are required for BLE HOGP (this folio keyboard). Without
+	# uhid, bluetoothd logs "input-hog profile accept failed" and no
+	# /dev/input node appears at the LUKS prompt.
 	local mod
-	for mod in bluetooth bnep hidp btusb btintel btrtl btmtk rfcomm usbhid; do
+	for mod in bluetooth bnep hidp btusb btintel btrtl btmtk rfcomm usbhid uhid cmac hid-multitouch; do
 		add_module "$mod"
 	done
 

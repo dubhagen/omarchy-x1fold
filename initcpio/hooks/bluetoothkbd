@@ -1,20 +1,102 @@
 #!/usr/bin/ash
-# Runtime hook: bring up dbus + bluetoothd before the encrypt prompt.
+# Runtime hook: bring up dbus + bluetoothd and reconnect the folio BLE
+# keyboard before the encrypt prompt. This keyboard is HOGP (BLE HID),
+# which needs /dev/uhid — classic hidp is not enough.
+
+bt_msg() {
+	msg "$1"
+	if command -v plymouth >/dev/null; then
+		plymouth display-message --text="$1" 2>/dev/null || true
+	fi
+}
+
+ensure_uhid() {
+	modprobe -q uhid
+	modprobe -q cmac
+	[ -e /dev/uhid ] && return 0
+	if [ -e /sys/class/misc/uhid/dev ]; then
+		majmin=$(cat /sys/class/misc/uhid/dev)
+		mknod /dev/uhid c "${majmin%:*}" "${majmin#*:}" 2>/dev/null || true
+	fi
+}
+
+usb_folio_present() {
+	local f
+	for f in /sys/class/input/*/name; do
+		[ -f "$f" ] || continue
+		grep -q 'ThinkPad Bluetooth TrackPoint Keyboard - USB' "$f" && return 0
+	done
+	return 1
+}
+
+ble_keyboard_ready() {
+	local f
+	for f in /sys/devices/virtual/misc/uhid/*/input/*/name; do
+		[ -f "$f" ] || continue
+		return 0
+	done
+	return 1
+}
+
+connect_paired_hid() {
+	local info addr
+	for info in /var/lib/bluetooth/*/*/info; do
+		[ -f "$info" ] || continue
+		grep -q '00001812-0000-1000-8000-00805f9b34fb' "$info" || continue
+		grep -q 'Trusted=true' "$info" || continue
+		addr=${info%/*}
+		addr=${addr##*/}
+		bt_msg ":: Connecting Bluetooth keyboard $addr..."
+		bluetoothctl connect "$addr" >/dev/null 2>&1 || true
+	done
+}
 
 run_earlyhook() {
 	msg ":: Activating dbus..."
-	mkdir -p /run/dbus
+	mkdir -p /run/dbus /run/sdp
+	ensure_uhid
 	/usr/bin/dbus-daemon --system --syslog-only
 }
 
 run_hook() {
 	msg ":: Activating bluetoothd..."
 	/usr/lib/bluetooth/bluetoothd &
-	# Give the ThinkPad BLE keyboard a moment to reconnect.
-	sleep 5
+
+	# USB-C takes over this folio and BLE goes idle. Don't delay LUKS
+	# when the user already has a working USB keyboard.
+	if usb_folio_present; then
+		msg ":: USB folio keyboard present; not waiting for Bluetooth"
+		return 0
+	fi
+
+	n=0
+	while [ "$n" -lt 10 ]; do
+		if bluetoothctl show 2>/dev/null | grep -q 'Powered: yes'; then
+			break
+		fi
+		bluetoothctl power on >/dev/null 2>&1 || true
+		sleep 1
+		n=$((n + 1))
+	done
+
+	connect_paired_hid
+
+	n=0
+	while [ "$n" -lt 12 ]; do
+		if ble_keyboard_ready; then
+			bt_msg ":: Bluetooth keyboard ready"
+			return 0
+		fi
+		sleep 1
+		n=$((n + 1))
+	done
+	bt_msg ":: Bluetooth keyboard not ready; USB still works at the passphrase prompt"
 }
 
 run_cleanuphook() {
+	if command -v plymouth >/dev/null; then
+		plymouth hide-message 2>/dev/null || true
+	fi
 	killall bluetoothd 2>/dev/null
 	killall dbus-daemon 2>/dev/null
 }
