@@ -154,6 +154,8 @@ That copies a `bluetoothkbd` mkinitcpio hook (before `encrypt`), includes `/var/
 
 Unplug USB-C before the passphrase prompt. This folio switches to USB HID when the cable is in, and Bluetooth goes idle. With the cable out, Plymouth shows **Waiting for Bluetooth keyboard** with a countdown, then **Bluetooth keyboard connected** or **Bluetooth keyboard not connected**. That status stays on the splash through the passphrase prompt. USB still works as a fallback if you plug it in, or if Bluetooth is slow.
 
+The hook exports `DM_DISABLE_UDEV=1` so cryptsetup can create `/dev/mapper/root` without waiting on udev. Starting BlueZ HOGP on the system bus otherwise stalls udev after a good passphrase, and the splash hangs on the mapper device.
+
 ## Book mode (not implemented)
 
 Lenovo’s “book mode” is a different fold: stand the device up like an open hardcover, hinge running vertically down the middle, both halves visible. The use case is reading or proofing — two pages side by side — without a keyboard on the glass. It is not clamshell.

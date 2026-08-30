@@ -2,6 +2,12 @@
 # Runtime hook: bring up dbus + bluetoothd and reconnect the folio BLE
 # keyboard before the encrypt prompt. This keyboard is HOGP (BLE HID),
 # which needs /dev/uhid — classic hidp is not enough.
+#
+# After a successful passphrase, cryptsetup waits for udev to create
+# /dev/mapper/root. systemd-udevd plus a system dbus + HOGP input events
+# can deadlock that wait, so the splash hangs forever. Disable libdevmapper
+# udev sync for the rest of the initramfs (plymouthd inherits this export)
+# and never kill dbus-daemon — udev cleanup still needs it.
 
 ply_msg() {
 	msg "$1"
@@ -57,7 +63,23 @@ keyboard_connected() {
 	sleep 1
 }
 
+drain_udev() {
+	if command -v udevadm >/dev/null; then
+		udevadm settle --timeout=5 2>/dev/null || true
+	fi
+}
+
 run_earlyhook() {
+	# Must be exported before plymouthd starts (plymouth run_hook).
+	# plymouth ask-for-password then runs cryptsetup in plymouthd, which
+	# inherits this so it will mknod /dev/mapper/root itself.
+	export DM_DISABLE_UDEV=1
+	mkdir -p /usr/local/bin
+	if [ ! -e /usr/local/bin/cryptsetup ]; then
+		printf '%s\n' '#!/bin/sh' 'export DM_DISABLE_UDEV=1' 'exec /usr/bin/cryptsetup "$@"' > /usr/local/bin/cryptsetup
+		chmod 755 /usr/local/bin/cryptsetup
+	fi
+
 	msg ":: Activating dbus..."
 	mkdir -p /run/dbus /run/sdp
 	ensure_uhid
@@ -72,6 +94,7 @@ run_hook() {
 	# when the user already has a working USB keyboard.
 	if usb_folio_present; then
 		ply_msg "USB keyboard connected"
+		drain_udev
 		return 0
 	fi
 
@@ -81,6 +104,7 @@ run_hook() {
 	while [ "$n" -lt 10 ]; do
 		if ble_keyboard_ready; then
 			keyboard_connected
+			drain_udev
 			return 0
 		fi
 		if bluetoothctl show 2>/dev/null | grep -q 'Powered: yes'; then
@@ -97,6 +121,7 @@ run_hook() {
 	while [ "$n" -lt 12 ]; do
 		if ble_keyboard_ready; then
 			keyboard_connected
+			drain_udev
 			return 0
 		fi
 		left=$((12 - n))
@@ -106,12 +131,15 @@ run_hook() {
 	done
 	ply_msg "Bluetooth keyboard not connected"
 	sleep 2
+	drain_udev
 }
 
 run_cleanuphook() {
 	if command -v plymouth >/dev/null && plymouth --ping 2>/dev/null; then
 		plymouth hide-message || true
 	fi
-	killall bluetoothd 2>/dev/null
-	killall dbus-daemon 2>/dev/null
+	# Do not kill dbus-daemon: systemd-udevd may be using that socket.
+	# switch_root reaps leftover bluetoothd.
+	killall bluetoothd 2>/dev/null || true
+	drain_udev
 }
