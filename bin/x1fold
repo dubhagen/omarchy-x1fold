@@ -1029,6 +1029,10 @@ def cmd_constrain_screensaver(state: dict, address: str | None = None) -> int:
     return 0
 
 
+def reset_ss_submap() -> None:
+    eval_lua('hl.dispatch(hl.dsp.submap("reset"))')
+
+
 def cmd_dismiss_screensaver(state: dict) -> int:
     """Unpark the bar, wait for exclusive-zone reflow, then close the saver.
 
@@ -1036,6 +1040,7 @@ def cmd_dismiss_screensaver(state: dict) -> int:
     exclusive zone shrinks them. Reveal the bar while the saver still covers
     that reflow.
     """
+    reset_ss_submap()
     if not screensaver_running() and not BAR_HIDDEN_MARKER.exists():
         restore_cursor_after_screensaver()
         sync_bar(state)
