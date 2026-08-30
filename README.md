@@ -13,10 +13,9 @@ It treats the folding OLED as a real posture, not just a rotated monitor: any of
 **Clamshell** is the mini-laptop posture. Fold the panel, set the Bluetooth keyboard on the lower half, and work on the top half only. The plugin:
 
 - Reserves that lower region so tiled windows cannot sit under the keys
-- Insets full-screen overlays (Omarchy menu, clipboard, emoji picker, OSD, …) into the same usable half so they center on the active area, not the physical OLED
+- In clamshell only, enforces a Quickshell boundary: overlay PanelWindows (menu, clipboard, emoji picker, OSD, notifications, KeyboardPanel, polkit, …) are inset to the visible OLED half so scrims, clicks, and cards stay above the keyboard. This uses layer-shell margins, not exclusive zones, so tiled windows do not reflow. Full-panel mode leaves them untouched. Other plugins can read `omarchy-shell mattd.x1fold usableArea`.
 - In clamshell only, maps the screensaver as a borderless float on the visible half (a named Hyprland rule, so it never flashes covering-fullscreen). TTE then measures the visible pty. Outside clamshell it is Omarchy’s stock covering fullscreen.
 - In clamshell only, Super+F, YouTube, and other fullscreen clients use that same half-panel float (cinema mode to the app, no compositor gaps). The bar parks for the duration. Exit tiles the window back into its original split, restores the focus border, and brings the bar back. Outside clamshell, Super+F is stock covering fullscreen.
-- Insets Quickshell overlay surfaces (menu, theme/wallpaper picker, clipboard, …) to the same usable half so they center on the viewable area. Other plugins can read `omarchy-shell mattd.x1fold usableArea`.
 - Paints the covered half true black (`#000000`) on an Overlay layer so those OLED pixels turn off
 - Swallows input on the covered half
 - Turns the on-screen keyboard off (you already have hardware keys)

@@ -175,9 +175,15 @@ Item {
 
   Timer {
     id: overlayTimer
-    interval: 80
-    repeat: false
-    onTriggered: root.constrainOverlays()
+    interval: 16
+    repeat: true
+    property int left: 0
+    onTriggered: {
+      root.constrainOverlays()
+      left -= 1
+      if (left <= 0)
+        stop()
+    }
   }
 
   Timer {
@@ -186,6 +192,11 @@ Item {
     repeat: true
     running: root.clamshell
     onTriggered: root.constrainOverlays()
+  }
+
+  function requestOverlayConstrain() {
+    overlayTimer.left = 40
+    overlayTimer.restart()
   }
 
   function screensaverOpen() {
@@ -247,6 +258,8 @@ Item {
     var ns = root.layerNamespace(item)
     if (ns === "mattd-x1fold-mask" || ns === "omarchy-background" || ns === "omarchy-bar")
       return true
+    if (ns.indexOf("omarchy-bar-") === 0)
+      return true
     if (ns.indexOf("lock") !== -1 || ns.indexOf("screensaver") !== -1)
       return true
     if (root.layerIsBackground(item))
@@ -254,20 +267,213 @@ Item {
     return false
   }
 
+  function isLayerPanel(item) {
+    if (!item)
+      return false
+    try {
+      return item.exclusionMode !== undefined && item.anchors !== undefined
+    } catch (e) {
+      return false
+    }
+  }
+
+  function panelScreenHeight(item) {
+    if (item.screen && item.screen.height)
+      return item.screen.height
+    var screens = Quickshell.screens
+    for (var i = 0; i < screens.length; i++) {
+      if (String(screens[i].name || "").indexOf("eDP") === 0)
+        return screens[i].height
+    }
+    return 0
+  }
+
+  function marginEdge(margins, edge) {
+    try {
+      if (!margins)
+        return 0
+      var v = Number(margins[edge])
+      return isNaN(v) ? 0 : v
+    } catch (e) {
+      return 0
+    }
+  }
+
+  // PanelWindow is a C++ type and rejects dynamic properties, so original
+  // margins / bounded flags live here instead of on the overlay objects.
+  property var panelBounds: []
+
+  function panelBoundState(item) {
+    var list = root.panelBounds
+    for (var i = 0; i < list.length; i++)
+      if (list[i].item === item)
+        return list[i]
+    var st = { item: item, orig: null, watch: false, bounded: false }
+    list.push(st)
+    return st
+  }
+
+  function panelIsBounded(item) {
+    var list = root.panelBounds
+    for (var i = 0; i < list.length; i++)
+      if (list[i].item === item)
+        return !!list[i].bounded
+    return false
+  }
+
+  function capturePanelOrig(item, st) {
+    if (st.orig)
+      return
+    var a = item.anchors
+    var m = item.margins
+    st.orig = {
+      top: !!a.top,
+      bottom: !!a.bottom,
+      left: !!a.left,
+      right: !!a.right,
+      marginTop: root.marginEdge(m, "top"),
+      marginBottom: root.marginEdge(m, "bottom"),
+      marginLeft: root.marginEdge(m, "left"),
+      marginRight: root.marginEdge(m, "right"),
+      implicitHeight: item.implicitHeight
+    }
+  }
+
+  function writeMargins(target, spec) {
+    if (!target || target.margins === undefined)
+      return
+    var m = target.margins
+    m.left = spec.left
+    m.right = spec.right
+    m.top = spec.top
+    m.bottom = spec.bottom
+    target.margins = m
+  }
+
+  function writeAnchors(target, spec) {
+    if (!target || target.anchors === undefined)
+      return
+    var a = target.anchors
+    a.left = spec.left
+    a.right = spec.right
+    a.top = spec.top
+    a.bottom = spec.bottom
+    target.anchors = a
+  }
+
+  function setPanelMargins(item, spec) {
+    try { root.writeMargins(item, spec) } catch (e) {}
+    try { root.writeMargins(item.WlrLayershell, spec) } catch (e2) {}
+  }
+
+  function setPanelAnchors(item, spec) {
+    try { root.writeAnchors(item, spec) } catch (e) {}
+    try { root.writeAnchors(item.WlrLayershell, spec) } catch (e2) {}
+  }
+
+  function watchPanel(item, st) {
+    if (st.watch)
+      return
+    st.watch = true
+    function reapply() {
+      Qt.callLater(function() { root.applyPanelBoundary(item) })
+    }
+    try { item.visibleChanged.connect(reapply) } catch (e) {}
+    try { item.backingWindowVisibleChanged.connect(reapply) } catch (e2) {}
+  }
+
+  // Shrink overlay PanelWindows to the visible OLED half in clamshell.
+  // Omarchy overlays bind all four edges, which ignores implicitHeight, so
+  // this insets via layer-shell margins instead of fighting those anchors.
+  // ExclusionMode stays Ignore: exclusive zones would reflow tiled windows.
+  // inset 0 restores the captured margins.
+  function applyPanelBoundary(item) {
+    if (!root.isLayerPanel(item) || root.skipOverlay(item))
+      return false
+    var st = root.panelBoundState(item)
+    root.capturePanelOrig(item, st)
+    root.watchPanel(item, st)
+    var screenH = root.panelScreenHeight(item)
+    if (!screenH)
+      return false
+    var inset = root.reservedLogical
+    var orig = st.orig
+    try {
+      var visible = false
+      try { visible = !!item.visible } catch (e1) {}
+      var usable = Math.max(1, screenH - inset)
+      if (inset > 0) {
+        root.setPanelMargins(item, {
+          top: orig.marginTop,
+          bottom: orig.marginBottom + inset,
+          left: orig.marginLeft,
+          right: orig.marginRight
+        })
+        // Newly mapped overlays sometimes ignore margins until the bottom
+        // anchor is dropped. implicitHeight then sizes the surface.
+        if (visible && Math.abs(item.height - usable) > 16) {
+          root.setPanelAnchors(item, {
+            top: true,
+            bottom: false,
+            left: orig.left || true,
+            right: orig.right || true
+          })
+          root.setPanelMargins(item, {
+            top: orig.marginTop,
+            bottom: orig.marginBottom,
+            left: orig.marginLeft,
+            right: orig.marginRight
+          })
+          try { item.implicitHeight = usable } catch (e2) {}
+        }
+        st.bounded = !visible || Math.abs(item.height - usable) <= 16
+        if ("cardTop" in item && st.bounded && item.cardTop !== -1)
+          item.cardTop = -1
+        return st.bounded
+      }
+      root.setPanelAnchors(item, {
+        top: orig.top,
+        bottom: orig.bottom,
+        left: orig.left,
+        right: orig.right
+      })
+      root.setPanelMargins(item, {
+        top: orig.marginTop,
+        bottom: orig.marginBottom,
+        left: orig.marginLeft,
+        right: orig.marginRight
+      })
+      if (orig.implicitHeight !== undefined) {
+        try { item.implicitHeight = orig.implicitHeight } catch (e3) {}
+      }
+      st.bounded = false
+      return true
+    } catch (e) {
+      st.bounded = false
+      return false
+    }
+  }
+
+  function parentPanelBounded(item) {
+    var p = item
+    for (var i = 0; i < 6 && p; i++) {
+      if (root.panelIsBounded(p))
+        return true
+      try { p = p.parent } catch (e) { return false }
+    }
+    return false
+  }
+
   function constrainOneOverlay(item) {
     if (!item)
       return
-    var inset = root.reservedLogical
-    var shelled = root.applyShellInset(item)
-    if (shelled) {
-      if ("cardTop" in item && item.cardTop !== -1)
-        item.cardTop = -1
-      return
-    }
-    root.nudgeOverlayCard(item, inset)
+    if (root.isLayerPanel(item))
+      root.applyPanelBoundary(item)
+    var extra = (root.panelIsBounded(item) || root.parentPanelBounded(item)) ? 0 : root.reservedLogical
+    root.nudgeOverlayCard(item, extra)
     if (!("cardTop" in item))
       return
-    if (!inset) {
+    if (!extra) {
       if (item.cardTop !== -1)
         item.cardTop = -1
       return
@@ -282,54 +488,11 @@ Item {
       }
     } catch (e) {}
     if (!cardH)
-      cardH = Math.min(480, Math.round((item.height - inset) * 0.55))
-    var usable = Math.max(0, item.height - inset)
+      cardH = Math.min(480, Math.round((item.height - extra) * 0.55))
+    var usable = Math.max(0, item.height - extra)
     var top = Math.max(12, Math.round((usable - cardH) / 2))
     if (item.cardTop !== top)
       item.cardTop = top
-  }
-
-  function applyShellInset(item) {
-    if (item.exclusionMode === undefined || !item.anchors)
-      return false
-    if (root.skipOverlay(item))
-      return false
-    var a = item.anchors
-    var fullBleed = (a.top && a.bottom && a.left && a.right) || item._x1foldShell === true
-    if (!fullBleed)
-      return false
-    var screenH = item.screen && item.screen.height ? item.screen.height : 0
-    if (!screenH)
-      return false
-    var inset = root.reservedLogical
-    var usable = Math.max(1, screenH - inset)
-    item._x1foldShell = true
-    try {
-      if (inset > 0) {
-        item.anchors = { top: true, bottom: false, left: true, right: true }
-        if (item.implicitHeight !== undefined)
-          item.implicitHeight = usable
-        if (item.height !== undefined)
-          item.height = usable
-        try {
-          if (typeof item.setMargins === "function")
-            item.setMargins({ left: 0, right: 0, top: 0, bottom: inset })
-          else
-            item.margins = { left: 0, right: 0, top: 0, bottom: inset }
-        } catch (e2) {}
-        return Math.abs(item.height - usable) <= 8
-      }
-      item.anchors = { top: true, bottom: true, left: true, right: true }
-      try {
-        if (typeof item.setMargins === "function")
-          item.setMargins({ left: 0, right: 0, top: 0, bottom: 0 })
-        else
-          item.margins = { left: 0, right: 0, top: 0, bottom: 0 }
-      } catch (e3) {}
-      return true
-    } catch (e) {
-      return false
-    }
   }
 
   function nudgeOverlayCard(item, inset) {
@@ -353,56 +516,112 @@ Item {
     } catch (e) {}
   }
 
-  function visitPluginTree(item, fn) {
-    if (!item)
+  function eachPluginRoot(fn) {
+    if (!root.shell)
       return
+    var loaders = root.shell.panelLoaders || {}
+    var id
+    try {
+      for (id in loaders) {
+        try {
+          if (loaders[id] && loaders[id].item)
+            fn(loaders[id].item)
+        } catch (e1) {}
+      }
+    } catch (e) {}
+    try {
+      var svcs = root.shell._services || {}
+      for (id in svcs)
+        fn(svcs[id])
+    } catch (e2) {
+      if (typeof root.shell.serviceFor === "function") {
+        var names = ["omarchy.notifications", "omarchy.osd", "omarchy.polkit"]
+        for (var si = 0; si < names.length; si++)
+          fn(root.shell.serviceFor(names[si]))
+      }
+    }
+    if (root.shell.bar)
+      fn(root.shell.bar)
+    try {
+      var slots = root.shell.bar && root.shell.bar.moduleSlots
+      if (slots) {
+        for (var i = 0; i < slots.length; i++) {
+          var slot = slots[i]
+          if (slot && slot.activeItem)
+            fn(slot.activeItem)
+        }
+      }
+    } catch (e3) {}
+  }
+
+  function collectLayerPanels() {
+    var out = []
     var seen = []
-    function visit(node, depth) {
-      if (!node || depth > 5 || seen.length > 80)
+    function add(node) {
+      if (!node || !root.isLayerPanel(node))
         return
       for (var s = 0; s < seen.length; s++)
         if (seen[s] === node)
           return
       seen.push(node)
-      try { fn(node) } catch (e) {}
-      var lists = []
-      try { if (node.children) lists.push(node.children) } catch (e) {}
-      // PanelWindow is a Window, so it lives in `data` of the plugin root,
-      // not in the Item children list of the same scene.
-      if (depth === 0) {
-        try { if (node.data) lists.push(node.data) } catch (e) {}
-      }
-      for (var li = 0; li < lists.length; li++) {
-        var list = lists[li]
-        var n = list.length
-        for (var i = 0; i < n; i++)
-          visit(list[i], depth + 1)
-      }
+      out.push(node)
     }
-    visit(item, 0)
-  }
-
-  function eachPluginRoot(fn) {
-    if (!root.shell)
-      return
-    var loaders = root.shell.panelLoaders || {}
-    for (var id in loaders) {
-      if (loaders[id] && loaders[id].item)
-        fn(loaders[id].item)
+    var visited = []
+    function takeDataPanels(obj) {
+      if (!obj)
+        return
+      for (var v = 0; v < visited.length; v++)
+        if (visited[v] === obj)
+          return
+      visited.push(obj)
+      add(obj)
+      try {
+        var d = obj.data
+        var n = d ? d.length : 0
+        for (var i = 0; i < n; i++) {
+          var child = null
+          try { child = d[i] } catch (e1) { continue }
+          add(child)
+          try {
+            var inst = child && child.instances
+            if (inst) {
+              for (var j = 0; j < inst.length; j++)
+                add(inst[j])
+            }
+          } catch (e2) {}
+          try { if (child && child.item) takeDataPanels(child.item) } catch (e6) {}
+        }
+      } catch (e) {}
+      try {
+        var inst2 = obj.instances
+        if (inst2) {
+          for (var k = 0; k < inst2.length; k++)
+            add(inst2[k])
+        }
+      } catch (e3) {}
+      try { if (obj.item) takeDataPanels(obj.item) } catch (e4) {}
+      try {
+        if (obj.panelLoader && obj.panelLoader.item)
+          takeDataPanels(obj.panelLoader.item)
+      } catch (e5) {}
     }
-    if (typeof root.shell.serviceFor === "function") {
-      var services = ["omarchy.notifications", "omarchy.osd"]
-      for (var si = 0; si < services.length; si++)
-        fn(root.shell.serviceFor(services[si]))
-    }
-    if (root.shell.bar)
-      fn(root.shell.bar)
+    root.eachPluginRoot(function(pluginRoot) { takeDataPanels(pluginRoot) })
+    return out
   }
 
   function constrainOverlays() {
-    root.eachPluginRoot(function(pluginRoot) {
-      root.visitPluginTree(pluginRoot, function(node) { root.constrainOneOverlay(node) })
-    })
+    var panels = root.collectLayerPanels()
+    for (var i = 0; i < panels.length; i++) {
+      var node = panels[i]
+      root.constrainOneOverlay(node)
+      try {
+        var kids = node.children
+        if (kids) {
+          for (var k = 0; k < kids.length; k++)
+            root.constrainOneOverlay(kids[k])
+        }
+      } catch (e) {}
+    }
   }
 
   function handleHyprlandEvent(event) {
@@ -459,13 +678,13 @@ Item {
         fsRetry.restart()
       }
     } else if (name === "openlayer" || name === "createlayer") {
-      overlayTimer.restart()
+      root.requestOverlayConstrain()
     }
   }
 
-  onClamshellChanged: overlayTimer.restart()
-  onCoverRatioChanged: overlayTimer.restart()
-  onOverlapPxChanged: overlayTimer.restart()
+  onClamshellChanged: root.requestOverlayConstrain()
+  onCoverRatioChanged: root.requestOverlayConstrain()
+  onOverlapPxChanged: root.requestOverlayConstrain()
 
   Timer {
     id: restoreTimer
@@ -482,7 +701,7 @@ Item {
   Component.onCompleted: {
     startDaemon()
     applyProc.running = true
-    overlayTimer.restart()
+    root.requestOverlayConstrain()
   }
 
   IpcHandler {
