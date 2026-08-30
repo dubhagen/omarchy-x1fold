@@ -1,0 +1,12 @@
+#!/bin/bash
+# Companion to bluetoothkbd: stop BlueZ after encrypt.
+
+build() {
+	add_runscript
+}
+
+help() {
+	cat <<HELPEOF
+Stop the initramfs bluetoothd started by bluetoothkbd, after LUKS opens.
+HELPEOF
+}

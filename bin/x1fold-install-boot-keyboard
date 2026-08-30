@@ -5,9 +5,11 @@ set -euo pipefail
 PLUGIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_INSTALL="$PLUGIN/initcpio/install/bluetoothkbd"
 SRC_HOOK="$PLUGIN/initcpio/hooks/bluetoothkbd"
+SRC_STOP_INSTALL="$PLUGIN/initcpio/install/bluetoothkbd-stop"
+SRC_STOP_HOOK="$PLUGIN/initcpio/hooks/bluetoothkbd-stop"
 SRC_CONF="$PLUGIN/initcpio/zz-x1fold-bluetooth.conf"
 
-[[ -f $SRC_INSTALL && -f $SRC_HOOK && -f $SRC_CONF ]] || {
+[[ -f $SRC_INSTALL && -f $SRC_HOOK && -f $SRC_STOP_INSTALL && -f $SRC_STOP_HOOK && -f $SRC_CONF ]] || {
   echo "x1fold-install-boot-keyboard: plugin files missing in $PLUGIN" >&2
   exit 1
 }
@@ -22,6 +24,8 @@ fi
 sudo mkdir -p /etc/initcpio/install /etc/initcpio/hooks /etc/mkinitcpio.conf.d
 sudo install -m 755 "$SRC_INSTALL" /etc/initcpio/install/bluetoothkbd
 sudo install -m 755 "$SRC_HOOK" /etc/initcpio/hooks/bluetoothkbd
+sudo install -m 755 "$SRC_STOP_INSTALL" /etc/initcpio/install/bluetoothkbd-stop
+sudo install -m 755 "$SRC_STOP_HOOK" /etc/initcpio/hooks/bluetoothkbd-stop
 sudo install -m 644 "$SRC_CONF" /etc/mkinitcpio.conf.d/zz-x1fold-bluetooth.conf
 
 # Auto-power Bluetooth adapters so the paired keyboard reconnects in the initramfs.

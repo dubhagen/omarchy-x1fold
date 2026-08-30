@@ -1,0 +1,16 @@
+#!/usr/bin/ash
+# Runs immediately after encrypt. Tear down initramfs BlueZ so plymouth
+# and udevadm control --exit are not blocked by HOGP input events.
+
+run_hook() {
+	if [ -f /run/btbus/bluetoothd.pid ]; then
+		kill "$(cat /run/btbus/bluetoothd.pid)" 2>/dev/null || true
+	fi
+	killall bluetoothd 2>/dev/null || true
+	if [ -f /run/btbus/dbus.pid ]; then
+		kill "$(cat /run/btbus/dbus.pid)" 2>/dev/null || true
+	fi
+	if command -v udevadm >/dev/null; then
+		udevadm settle --timeout=5 2>/dev/null || true
+	fi
+}

@@ -267,6 +267,8 @@ install_boot() {
   sudo mkdir -p /etc/initcpio/install /etc/initcpio/hooks /etc/mkinitcpio.conf.d
   sudo install -m 755 "$REPO/initcpio/install/bluetoothkbd" /etc/initcpio/install/bluetoothkbd
   sudo install -m 755 "$REPO/initcpio/hooks/bluetoothkbd" /etc/initcpio/hooks/bluetoothkbd
+  sudo install -m 755 "$REPO/initcpio/install/bluetoothkbd-stop" /etc/initcpio/install/bluetoothkbd-stop
+  sudo install -m 755 "$REPO/initcpio/hooks/bluetoothkbd-stop" /etc/initcpio/hooks/bluetoothkbd-stop
   sudo install -m 644 "$REPO/initcpio/zz-x1fold-bluetooth.conf" /etc/mkinitcpio.conf.d/zz-x1fold-bluetooth.conf
   sudo mkdir -p /etc/libinput /etc/udev/hwdb.d /etc/udev/rules.d
   sudo install -m 644 "$REPO/contrib/libinput-x1fold.quirks" /etc/libinput/local-overrides.quirks
