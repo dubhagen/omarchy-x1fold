@@ -268,8 +268,13 @@ install_boot() {
   sudo install -m 755 "$REPO/initcpio/install/bluetoothkbd" /etc/initcpio/install/bluetoothkbd
   sudo install -m 755 "$REPO/initcpio/hooks/bluetoothkbd" /etc/initcpio/hooks/bluetoothkbd
   sudo install -m 644 "$REPO/initcpio/zz-x1fold-bluetooth.conf" /etc/mkinitcpio.conf.d/zz-x1fold-bluetooth.conf
-  sudo mkdir -p /etc/libinput
+  sudo mkdir -p /etc/libinput /etc/udev/hwdb.d /etc/udev/rules.d
   sudo install -m 644 "$REPO/contrib/libinput-x1fold.quirks" /etc/libinput/local-overrides.quirks
+  sudo install -m 644 "$REPO/contrib/udev-x1fold-touchpad.hwdb" /etc/udev/hwdb.d/71-x1fold-touchpad.hwdb
+  sudo install -m 644 "$REPO/contrib/udev-x1fold-keyboard.rules" /etc/udev/rules.d/66-x1fold-keyboard.rules
+  sudo systemd-hwdb update
+  sudo udevadm control --reload
+  sudo udevadm trigger --subsystem-match=input --action=add || true
   if [[ -f /etc/bluetooth/main.conf ]]; then
     sudo sed -i 's/^#AutoEnable=true/AutoEnable=true/' /etc/bluetooth/main.conf
   fi
@@ -283,6 +288,7 @@ do_uninstall() {
   strip_marked_lua "$HYPR/bindings.lua"
   strip_marked_lua "$HYPR/autostart.lua"
   strip_marked_lua "$HYPR/hyprland.lua"
+  strip_marked_lua "$HYPR/input.lua"
   strip_menu "$MENU"
   if [[ -L $BIN_LINK ]]; then
     rm -f "$BIN_LINK"

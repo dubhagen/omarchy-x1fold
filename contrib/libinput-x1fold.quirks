@@ -1,20 +1,37 @@
-# ThinkPad X1 Fold 16 Bluetooth TrackPoint Keyboard (17ef:613e).
+# ThinkPad X1 Fold 16 TrackPoint Keyboard
+#   Bluetooth  17ef:613e  HID name X1FKeyboard
+#   USB-C      17ef:6142  Primax "... Keyboard - USB"
+#
 # Generic bluetooth keyboards are AttrKeyboardIntegration=external, so
-# disable-while-typing never sees this keyboard. Treat it as internal so
-# its own touchpad and TrackPoint are suppressed while typing.
+# disable-while-typing never sees them. USB touchpads are tagged external
+# the same way. Treat this folio's keyboard + touchpad as internal so DWT
+# pairs them and libinput enables edge palm detection. The touchpad has no
+# pressure/size axes, so AttrPalmPressureThreshold is a no-op.
 
-[Lenovo X1 Fold TrackPoint Keyboard]
-MatchName=X1FKeyboard
+[Lenovo X1 Fold TrackPoint Keyboard Bluetooth]
 MatchUdevType=keyboard
 MatchBus=bluetooth
 MatchVendor=0x17EF
 MatchProduct=0x613E
 AttrKeyboardIntegration=internal
 
-[Lenovo X1 Fold TrackPoint Keyboard Touchpad]
-MatchName=X1FKeyboard Touchpad
+[Lenovo X1 Fold TrackPoint Keyboard Bluetooth Touchpad]
 MatchUdevType=touchpad
 MatchBus=bluetooth
 MatchVendor=0x17EF
 MatchProduct=0x613E
-AttrPalmPressureThreshold=120
+AttrTouchpadIntegration=internal
+
+[Lenovo X1 Fold TrackPoint Keyboard USB]
+MatchUdevType=keyboard
+MatchBus=usb
+MatchVendor=0x17EF
+MatchProduct=0x6142
+AttrKeyboardIntegration=internal
+
+[Lenovo X1 Fold TrackPoint Keyboard USB Touchpad]
+MatchUdevType=touchpad
+MatchBus=usb
+MatchVendor=0x17EF
+MatchProduct=0x6142
+AttrTouchpadIntegration=internal

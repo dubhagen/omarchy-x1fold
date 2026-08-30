@@ -1,0 +1,9 @@
+# ThinkPad X1 Fold 16 TrackPoint Keyboard touchpad.
+# USB-C lands on a removable port, so 65-integration.rules tags it external.
+# Bluetooth is external by default. Force internal so DWT can pair.
+
+touchpad:usb:v17efp6142:*
+ ID_INPUT_TOUCHPAD_INTEGRATION=internal
+
+touchpad:bluetooth:v17efp613e:*
+ ID_INPUT_TOUCHPAD_INTEGRATION=internal

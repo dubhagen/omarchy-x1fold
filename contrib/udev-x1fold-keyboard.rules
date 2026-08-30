@@ -1,0 +1,12 @@
+# ThinkPad X1 Fold 16 TrackPoint Keyboard.
+# USB-C is a removable port, so 65-integration.rules tags the keyboard
+# external. Bluetooth is external by default. Force internal so libinput
+# disable-while-typing can pair this keyboard with its own touchpad.
+
+ACTION=="add|change", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", \
+  ATTRS{idVendor}=="17ef", ATTRS{idProduct}=="6142", \
+  ENV{ID_INTEGRATION}="internal"
+
+ACTION=="add|change", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", \
+  ATTRS{idVendor}=="17ef", ATTRS{idProduct}=="613e", \
+  ENV{ID_INTEGRATION}="internal"

@@ -62,7 +62,7 @@ cd ~/projects/omarchy/x1fold-plugin
 5. Clone `omarchy.power` to `mattd.power` (still a separate bar widget) and overlay dual-battery pack totals
 6. Restart the Omarchy shell
 
-To also install Squeekboard, the Bluetooth-keyboard-at-LUKS initramfs hook, and the libinput quirk so disable-while-typing applies to the Bluetooth keyboard (needs `sudo` in a terminal):
+To also install Squeekboard, the Bluetooth-keyboard-at-LUKS initramfs hook, and the libinput quirk so disable-while-typing applies to the folio keyboard on Bluetooth and USB-C (needs `sudo` in a terminal):
 
 ```bash
 ./setup.sh --boot
@@ -131,7 +131,9 @@ The panel slider steps by 5 px, with − / + on either side. The same value is `
 
 ## On-screen keyboard
 
-The ThinkPad Bluetooth TrackPoint Keyboard presents as an external HID, so stock libinput will not suppress its touchpad or TrackPoint while typing. The plugin’s Hyprland device block turns disable-while-typing on those pointers and uses a slower key-repeat. Tap-to-click stays on. `./setup.sh --boot` also installs a libinput quirk (`/etc/libinput/local-overrides.quirks`) that marks the keyboard internal so typing actually pairs with those pointers.
+The ThinkPad TrackPoint Keyboard presents as an external HID on Bluetooth (`17ef:613e`, `X1FKeyboard`) and USB-C (`17ef:6142`, Primax). Stock libinput will not suppress its touchpad or TrackPoint while typing. The plugin’s Hyprland device block turns disable-while-typing on those pointers (both bus names) and uses a slower key-repeat. Tap-to-click stays on. `./setup.sh --boot` also installs a libinput quirk (`/etc/libinput/local-overrides.quirks`) plus a udev hwdb/rule that marks the keyboard and touchpad internal so typing actually pairs with those pointers.
+
+USB-C DWT (internal keyboard/touchpad tagging, Primax USB device names) follows [harshach/x1fold](https://github.com/harshach/x1fold). Grok helped adapt that for this Omarchy 4 plugin. Your mileage may vary: firmware, Hyprland, and cable vs Bluetooth can change device names and udev integration tags.
 
 Squeekboard is started with the session (`SQUEEKBOARD_FORCE=1` so it is allowed on a non-phone form factor). Super+Alt+R shows or hides it.
 
@@ -183,6 +185,10 @@ omarchy restart shell
 ```
 
 `setup.sh` points `~/.config/omarchy/plugins/mattd.x1fold` at this directory, so the checkout *is* the live plugin.
+
+## Credits
+
+[harshach/x1fold](https://github.com/harshach/x1fold) for the folio USB-C disable-while-typing approach (mark the keyboard and touchpad internal; match the Primax USB names). Adapted here with Grok. YMMV.
 
 ## License
 
