@@ -32,6 +32,8 @@ There is no separate “mini-laptop” mode. That name is an alias of `clamshell
 
 Omarchy’s idle-wake path re-enables the internal panel *without* a transform, and this OLED is natively portrait. The plugin watches screensaver dismiss, DPMS restore, and `monitoradded` / `configreloaded`, then puts the saved orientation back.
 
+**Dual battery** is a separate bar widget. The Fold has two cells (~50 Wh + ~14.6 Wh). Stock Omarchy only prints BAT0. `setup.sh` clones `omarchy.power` to `mattd.power` and overlays pack totals (size, percentage, rate, time). That clone is not part of `mattd.x1fold`; uninstalling the fold plugin leaves it installed.
+
 ## Requirements
 
 - Omarchy 4 with Hyprland (Lua config: `hyprctl eval "hl.monitor({...})"`)
@@ -57,7 +59,8 @@ cd ~/projects/omarchy/x1fold-plugin
 2. Put `x1fold` on your `PATH` (`~/.local/bin/x1fold`)
 3. Enable the bar widget (right section)
 4. Install keybindings, Squeekboard autostart, layer rules, TrackPoint-keyboard input, and Omarchy menu entries
-5. Restart the Omarchy shell
+5. Clone `omarchy.power` to `mattd.power` (still a separate bar widget) and overlay dual-battery pack totals
+6. Restart the Omarchy shell
 
 To also install Squeekboard, the Bluetooth-keyboard-at-LUKS initramfs hook, and the libinput quirk so disable-while-typing applies to the Bluetooth keyboard (needs `sudo` in a terminal):
 

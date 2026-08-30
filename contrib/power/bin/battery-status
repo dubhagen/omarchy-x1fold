@@ -1,0 +1,139 @@
+#!/bin/bash
+# Combined battery status for dual-cell machines (X1 Fold BAT0+BAT1).
+# Same --shell keys as omarchy-battery-status, using UPower's DisplayDevice
+# plus instantaneous sysfs power from every BAT*.
+
+set -uo pipefail
+
+shell_output=false
+power_supply_path="${OMARCHY_POWER_SUPPLY_PATH:-/sys/class/power_supply}"
+display_path="/org/freedesktop/UPower/devices/DisplayDevice"
+
+case "${1:-}" in
+  "") ;;
+  --shell) shell_output=true ;;
+  *) echo "Usage: battery-status [--shell]" >&2; exit 2 ;;
+esac
+
+if ! info=$(upower -i "$display_path" 2>/dev/null); then
+  exec omarchy-battery-status ${1:+"$1"}
+fi
+
+if ! grep -q 'present:[[:space:]]*yes' <<<"$info"; then
+  exec omarchy-battery-status ${1:+"$1"}
+fi
+
+percentage=$(awk '/percentage/ { printf "%d", $2; exit }' <<<"$info")
+capacity=$(awk '/energy-full:/ { printf "%d", $2; exit }' <<<"$info")
+time_remaining=$(awk '/time to (empty|full)/ {
+  value = $4
+  unit = $5
+  if (unit ~ /^minute/) {
+    printf "%dm", int(value)
+  } else {
+    hours = int(value)
+    minutes = int((value - hours) * 60)
+    if (minutes > 0) {
+      printf "%dh %dm", hours, minutes
+    } else {
+      printf "%dh", hours
+    }
+  }
+  exit
+}' <<<"$info")
+state=$(awk '/state/ { print $2; exit }' <<<"$info")
+power_rate_raw=$(awk '/energy-rate/ { print $2; exit }' <<<"$info")
+
+# Instantaneous draw: sum every present battery.
+power_sum=0
+have_sysfs=0
+for bat in "$power_supply_path"/BAT*; do
+  [[ -d $bat ]] || continue
+  [[ -r $bat/present && $(<"$bat/present") == 1 ]] || continue
+  if [[ -r $bat/power_now ]]; then
+    power_sum=$(awk -v acc="$power_sum" -v microwatts="$(<"$bat/power_now")" 'BEGIN { print acc + microwatts / 1000000 }')
+    have_sysfs=1
+  elif [[ -r $bat/current_now && -r $bat/voltage_now ]]; then
+    power_sum=$(awk -v acc="$power_sum" \
+      -v microamps="$(<"$bat/current_now")" \
+      -v microvolts="$(<"$bat/voltage_now")" \
+      'BEGIN { print acc + microamps * microvolts / 1000000000000 }')
+    have_sysfs=1
+  fi
+done
+if (( have_sysfs )); then
+  power_rate_raw=$power_sum
+fi
+
+power_rate=$(awk -v rate="${power_rate_raw:-0}" 'BEGIN {
+  rounded = sprintf("%.1f", rate)
+  sub(/\.0$/, "", rounded)
+  print rounded
+}')
+
+threshold_start=$(awk '/charge-start-threshold:/ { gsub(/%/, "", $2); print int($2); exit }' <<<"$info")
+threshold_end=$(awk '/charge-end-threshold:/ { gsub(/%/, "", $2); print int($2); exit }' <<<"$info")
+[[ -z ${threshold_end:-} ]] && threshold_end=$(cat "$power_supply_path"/BAT*/charge_control_end_threshold 2>/dev/null | head -1 || true)
+[[ -z ${threshold_start:-} ]] && threshold_start=$(cat "$power_supply_path"/BAT*/charge_control_start_threshold 2>/dev/null | head -1 || true)
+
+ac_online=false
+for supply in "$power_supply_path"/*; do
+  [[ -r $supply/type ]] || continue
+  [[ $(<"$supply/type") == "Mains" ]] || continue
+  [[ -r $supply/online ]] || continue
+  if [[ $(<"$supply/online") == "1" ]]; then
+    ac_online=true
+    break
+  fi
+done
+
+charge_idle=false
+if awk -v rate="${power_rate_raw:-0}" 'BEGIN { exit !(rate <= 0.2) }'; then
+  charge_idle=true
+fi
+
+charge_holding=false
+if [[ $ac_online == "true" && -n ${threshold_end:-} ]]; then
+  if [[ $state == "pending-charge" ]]; then
+    charge_holding=true
+  elif [[ $state == "fully-charged" ]] && (( percentage < 99 )); then
+    charge_holding=true
+  elif [[ $state == "charging" && $charge_idle == "true" ]] && (( threshold_end < 99 && percentage >= threshold_end )); then
+    charge_holding=true
+  fi
+fi
+
+if [[ $shell_output == "true" ]]; then
+  printf 'percentage\t%s\n' "${percentage}%"
+  if [[ $charge_holding == "true" ]]; then
+    printf 'state\tholding\n'
+  else
+    printf 'state\t%s\n' "$state"
+  fi
+  printf 'rate\t%s\n' "${power_rate}W"
+  printf 'size\t%s\n' "${capacity}Wh"
+  printf 'time\t%s\n' "$time_remaining"
+  cycles=$(cat "$power_supply_path"/BAT*/cycle_count 2>/dev/null | awk 'NF{print; exit}' || true)
+  [[ -n ${cycles:-} ]] && printf 'cycles\t%s\n' "$cycles"
+  if [[ -n ${threshold_end:-} ]]; then
+    if [[ -n ${threshold_start:-} && $threshold_start != "$threshold_end" ]]; then
+      printf 'threshold\t%s-%s%%\n' "$threshold_start" "$threshold_end"
+    else
+      printf 'threshold\t%s%%\n' "$threshold_end"
+    fi
+  fi
+  exit 0
+fi
+
+if [[ $charge_holding == "true" ]]; then
+  if [[ -n ${threshold_start:-} && $threshold_start != "$threshold_end" ]]; then
+    threshold_label="${threshold_start}-${threshold_end}%"
+  else
+    threshold_label="${threshold_end}%"
+  fi
+  echo "Battery ${percentage}%  ·  Holding at ${threshold_label}  ·  ${power_rate}W / ${capacity}Wh"
+elif [[ $state == "charging" ]]; then
+  echo "Battery ${percentage}%  ·  ${time_remaining} to full  ·   ${power_rate}W / ${capacity}Wh"
+else
+  echo "Battery ${percentage}%  ·  ${time_remaining} left  ·   ${power_rate}W / ${capacity}Wh"
+fi

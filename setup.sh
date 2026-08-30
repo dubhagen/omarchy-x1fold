@@ -3,8 +3,10 @@
 set -euo pipefail
 
 PLUGIN_ID="mattd.x1fold"
+POWER_ID="mattd.power"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIVE="${HOME}/.config/omarchy/plugins/${PLUGIN_ID}"
+POWER_LIVE="${HOME}/.config/omarchy/plugins/${POWER_ID}"
 BIN_LINK="${HOME}/.local/bin/x1fold"
 HYPR="${HOME}/.config/hypr"
 MENU="${HOME}/.config/omarchy/extensions/omarchy-menu.jsonc"
@@ -230,6 +232,21 @@ raise SystemExit(0 if any(p.get('id')=='${PLUGIN_ID}' and p.get('enabled') for p
   omarchy plugin enable "$PLUGIN_ID" --section right
 }
 
+install_power_overlay() {
+  # Dual-battery totals live in a cloned omarchy.power widget, not in
+  # mattd.x1fold. setup.sh clones it once, then overlays our files.
+  if [[ ! -d $POWER_LIVE ]]; then
+    log "cloning omarchy.power → ${POWER_ID}"
+    omarchy plugin clone omarchy.power
+  fi
+  [[ -d $POWER_LIVE ]] || die "failed to create ${POWER_LIVE}"
+  mkdir -p "$POWER_LIVE/bin"
+  install -m 644 "$REPO/contrib/power/Panel.qml" "$POWER_LIVE/Panel.qml"
+  install -m 644 "$REPO/contrib/power/Model.js" "$POWER_LIVE/Model.js"
+  install -m 755 "$REPO/contrib/power/bin/battery-status" "$POWER_LIVE/bin/battery-status"
+  log "dual-battery overlay installed on ${POWER_ID} (separate from ${PLUGIN_ID})"
+}
+
 install_desktop() {
   mkdir -p "$HYPR" "$(dirname "$MENU")"
   patch_marked_lua "$HYPR/bindings.lua" "$REPO/contrib/bindings.lua"
@@ -295,6 +312,7 @@ log "installing ${PLUGIN_ID} from $REPO"
 install_plugin_link
 install_desktop
 enable_plugin
+install_power_overlay
 
 if (( BOOT )); then
   install_boot
