@@ -93,12 +93,8 @@ EOF
 }
 
 run_earlyhook() {
+	# udev is busy with HOGP during encrypt; let cryptsetup mknod the mapper.
 	export DM_DISABLE_UDEV=1
-	mkdir -p /usr/local/bin
-	if [ ! -e /usr/local/bin/cryptsetup ]; then
-		printf '%s\n' '#!/bin/sh' 'export DM_DISABLE_UDEV=1' 'exec /usr/bin/cryptsetup "$@"' > /usr/local/bin/cryptsetup
-		chmod 755 /usr/local/bin/cryptsetup
-	fi
 	ensure_uhid
 	msg ":: Activating private bluetooth dbus..."
 	start_private_bus

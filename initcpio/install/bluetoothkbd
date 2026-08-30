@@ -41,22 +41,14 @@ build() {
 		add_file "$libnslfile"
 	done
 
-	add_dir /etc/dbus-1/
-	add_dir /etc/dbus-1/system.d/
-	add_dir /run/dbus/
-	add_file /usr/share/dbus-1/system.conf
+	# Private bus only. Do not ship system.conf or /run/dbus — dbus-daemon
+	# --system would create system_bus_socket, udev/systemd would attach,
+	# and that socket survives on the /run that switch_root keeps.
 	add_binary /usr/bin/dbus-daemon
-	add_file /usr/lib/sysusers.d/dbus.conf
-	add_file /usr/lib/tmpfiles.d/dbus.conf
-	add_symlink /var/lib/dbus/machine-id /etc/machine-id
-
 	add_file /etc/bluetooth/main.conf
 	add_binary /usr/lib/bluetooth/bluetoothd
-	add_file /usr/share/dbus-1/system.d/bluetooth.conf
-	add_file /usr/share/dbus-1/system-services/org.bluez.service
 	add_full_dir /var/lib/bluetooth
 	add_binary /usr/bin/bluetoothctl
-
 	add_dir /run/sdp/
 	add_symlink /var/run /run
 
