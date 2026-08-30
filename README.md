@@ -56,10 +56,10 @@ cd ~/projects/omarchy/x1fold-plugin
 1. Symlink this checkout to `~/.config/omarchy/plugins/mattd.x1fold`
 2. Put `x1fold` on your `PATH` (`~/.local/bin/x1fold`)
 3. Enable the bar widget (right section)
-4. Install keybindings, Squeekboard autostart, layer rules, and Omarchy menu entries
+4. Install keybindings, Squeekboard autostart, layer rules, TrackPoint-keyboard input, and Omarchy menu entries
 5. Restart the Omarchy shell
 
-To also install Squeekboard and the Bluetooth-keyboard-at-LUKS initramfs hook (needs `sudo` in a terminal):
+To also install Squeekboard, the Bluetooth-keyboard-at-LUKS initramfs hook, and the libinput quirk so disable-while-typing applies to the Bluetooth keyboard (needs `sudo` in a terminal):
 
 ```bash
 ./setup.sh --boot
@@ -127,6 +127,8 @@ x1fold apply
 The panel slider steps by 5 px, with − / + on either side. The same value is `x1fold overlap N`.
 
 ## On-screen keyboard
+
+The ThinkPad Bluetooth TrackPoint Keyboard presents as an external HID, so stock libinput will not suppress its touchpad or TrackPoint while typing. The plugin’s Hyprland device block turns disable-while-typing on those pointers, turns off tap-to-click on the tiny keyboard touchpad, and uses a slower key-repeat. `./setup.sh --boot` also installs a libinput quirk (`/etc/libinput/local-overrides.quirks`) that marks the keyboard internal so typing actually pairs with those pointers.
 
 Squeekboard is started with the session (`SQUEEKBOARD_FORCE=1` so it is allowed on a non-phone form factor). Super+Alt+R shows or hides it.
 

@@ -235,8 +235,11 @@ install_desktop() {
   patch_marked_lua "$HYPR/bindings.lua" "$REPO/contrib/bindings.lua"
   patch_marked_lua "$HYPR/autostart.lua" "$REPO/contrib/autostart.lua"
   patch_marked_lua "$HYPR/hyprland.lua" "$REPO/contrib/hyprland.lua"
+  patch_marked_lua "$HYPR/input.lua" "$REPO/contrib/input.lua"
+  mkdir -p "${HOME}/.config/libinput"
+  install -m 644 "$REPO/contrib/libinput-x1fold.quirks" "${HOME}/.config/libinput/local-overrides.quirks"
   merge_menu "$MENU"
-  log "Hyprland bindings, autostart, layer rules, and menu entries installed"
+  log "Hyprland bindings, autostart, layer rules, keyboard input, and menu entries installed"
 }
 
 install_boot() {
@@ -248,6 +251,8 @@ install_boot() {
   sudo install -m 755 "$REPO/initcpio/install/bluetoothkbd" /etc/initcpio/install/bluetoothkbd
   sudo install -m 755 "$REPO/initcpio/hooks/bluetoothkbd" /etc/initcpio/hooks/bluetoothkbd
   sudo install -m 644 "$REPO/initcpio/zz-x1fold-bluetooth.conf" /etc/mkinitcpio.conf.d/zz-x1fold-bluetooth.conf
+  sudo mkdir -p /etc/libinput
+  sudo install -m 644 "$REPO/contrib/libinput-x1fold.quirks" /etc/libinput/local-overrides.quirks
   if [[ -f /etc/bluetooth/main.conf ]]; then
     sudo sed -i 's/^#AutoEnable=true/AutoEnable=true/' /etc/bluetooth/main.conf
   fi

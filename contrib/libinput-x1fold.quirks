@@ -1,0 +1,20 @@
+# ThinkPad X1 Fold 16 Bluetooth TrackPoint Keyboard (17ef:613e).
+# Generic bluetooth keyboards are AttrKeyboardIntegration=external, so
+# disable-while-typing never sees this keyboard. Treat it as internal so
+# its own touchpad and TrackPoint are suppressed while typing.
+
+[Lenovo X1 Fold TrackPoint Keyboard]
+MatchName=X1FKeyboard
+MatchUdevType=keyboard
+MatchBus=bluetooth
+MatchVendor=0x17EF
+MatchProduct=0x613E
+AttrKeyboardIntegration=internal
+
+[Lenovo X1 Fold TrackPoint Keyboard Touchpad]
+MatchName=X1FKeyboard Touchpad
+MatchUdevType=touchpad
+MatchBus=bluetooth
+MatchVendor=0x17EF
+MatchProduct=0x613E
+AttrPalmPressureThreshold=120
