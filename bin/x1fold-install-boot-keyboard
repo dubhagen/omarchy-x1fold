@@ -27,6 +27,11 @@ sudo install -m 755 "$SRC_HOOK" /etc/initcpio/hooks/bluetoothkbd
 sudo install -m 755 "$SRC_STOP_INSTALL" /etc/initcpio/install/bluetoothkbd-stop
 sudo install -m 755 "$SRC_STOP_HOOK" /etc/initcpio/hooks/bluetoothkbd-stop
 sudo install -m 644 "$SRC_CONF" /etc/mkinitcpio.conf.d/zz-x1fold-bluetooth.conf
+sudo mkdir -p /usr/local/lib/x1fold /etc/systemd/system
+sudo install -m 755 "$PLUGIN/contrib/rebind-cnvi-bt" /usr/local/lib/x1fold/rebind-cnvi-bt
+sudo install -m 644 "$PLUGIN/contrib/x1fold-rebind-bluetooth.service" /etc/systemd/system/x1fold-rebind-bluetooth.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now x1fold-rebind-bluetooth.service
 
 # Auto-power Bluetooth adapters so the paired keyboard reconnects in the initramfs.
 if [[ -f /etc/bluetooth/main.conf ]]; then

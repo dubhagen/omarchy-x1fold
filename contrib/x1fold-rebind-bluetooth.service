@@ -1,0 +1,13 @@
+[Unit]
+Description=Rebind Intel CNVi Bluetooth if left unbound after LUKS initramfs
+After=systemd-udevd.service sysinit.target
+Before=bluetooth.service
+DefaultDependencies=yes
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/x1fold/rebind-cnvi-bt
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target bluetooth.service

@@ -274,6 +274,11 @@ install_boot() {
   sudo install -m 644 "$REPO/contrib/libinput-x1fold.quirks" /etc/libinput/local-overrides.quirks
   sudo install -m 644 "$REPO/contrib/udev-x1fold-touchpad.hwdb" /etc/udev/hwdb.d/71-x1fold-touchpad.hwdb
   sudo install -m 644 "$REPO/contrib/udev-x1fold-keyboard.rules" /etc/udev/rules.d/66-x1fold-keyboard.rules
+  sudo mkdir -p /usr/local/lib/x1fold /etc/systemd/system
+  sudo install -m 755 "$REPO/contrib/rebind-cnvi-bt" /usr/local/lib/x1fold/rebind-cnvi-bt
+  sudo install -m 644 "$REPO/contrib/x1fold-rebind-bluetooth.service" /etc/systemd/system/x1fold-rebind-bluetooth.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now x1fold-rebind-bluetooth.service
   sudo systemd-hwdb update
   sudo udevadm control --reload
   sudo udevadm trigger --subsystem-match=input --action=add || true

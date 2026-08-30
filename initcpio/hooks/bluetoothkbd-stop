@@ -1,11 +1,11 @@
 #!/usr/bin/ash
-# Immediately after encrypt. Fully tear down initramfs BlueZ so Plymouth
-# and udevadm control --exit are not blocked by HOGP.
+# Immediately after encrypt. Tear down initramfs BlueZ userspace so
+# Plymouth and udevadm control --exit are not blocked by HOGP.
 #
-# Do not `rfkill block`: systemd-rfkill persists that under
-# /var/lib/systemd/rfkill and Omarchy would come back with Bluetooth off.
-# Unbind btusb instead; switch-root's udevd coldplug brings the adapter up
-# for the real bluetoothd.
+# Do not rfkill block (Omarchy persists that). Do not unbind btusb:
+# unbind survives switch-root, udev does not re-add an already-enumerated
+# USB interface, /sys/class/bluetooth stays empty, and bluetooth.service
+# never gets an adapter. Leave the kernel HCI node; real bluetoothd attaches.
 
 BTBUS_DIR=/run/btbus
 BTBUS_SOCK=$BTBUS_DIR/bus
@@ -20,7 +20,6 @@ run_hook() {
 			addr=${addr##*/}
 			bluetoothctl disconnect "$addr" >/dev/null 2>&1 || true
 		done
-		bluetoothctl power off >/dev/null 2>&1 || true
 	fi
 
 	if [ -f "$BTBUS_DIR/bluetoothd.pid" ]; then
@@ -37,14 +36,6 @@ run_hook() {
 		kill "$(cat "$BTBUS_DIR/dbus.pid")" 2>/dev/null || true
 		sleep 1
 		kill -9 "$(cat "$BTBUS_DIR/dbus.pid")" 2>/dev/null || true
-	fi
-
-	# Drop the kernel HCI node without touching rfkill.
-	if [ -d /sys/bus/usb/drivers/btusb ]; then
-		for iface in /sys/bus/usb/drivers/btusb/*:*; do
-			[ -e "$iface" ] || continue
-			echo "${iface##*/}" >/sys/bus/usb/drivers/btusb/unbind 2>/dev/null || true
-		done
 	fi
 
 	modprobe -r uhid 2>/dev/null || true

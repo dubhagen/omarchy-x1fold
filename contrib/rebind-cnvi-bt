@@ -1,0 +1,18 @@
+#!/bin/bash
+# Bind Intel CNVi Bluetooth (8087:0033) if initramfs left the interfaces
+# unbound. Same kernel sysfs survives switch-root; udev will not emit a
+# new add event for a device that was already enumerated.
+set -euo pipefail
+
+modprobe btusb 2>/dev/null || true
+
+for d in /sys/bus/usb/devices/*; do
+	[[ -f $d/idVendor && -f $d/idProduct ]] || continue
+	[[ $(<"$d/idVendor") == 8087 ]] || continue
+	[[ $(<"$d/idProduct") == 0033 ]] || continue
+	for i in "$d":*; do
+		[[ -e $i ]] || continue
+		[[ -e $i/driver ]] && continue
+		echo "${i##*/}" >/sys/bus/usb/drivers/btusb/bind 2>/dev/null || true
+	done
+done
