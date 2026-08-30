@@ -4,6 +4,8 @@ An [Omarchy](https://omarchy.org/) shell plugin for the **Lenovo ThinkPad X1 Fol
 
 It treats the folding OLED as a real posture, not just a rotated monitor: any of the four orientations, a clamshell “keyboard on glass” mode that blacks out the lower half, auto-rotate from the chassis accelerometers, and an on-screen keyboard for tablet use.
 
+Built with help from Grok. Your mileage may vary: this is one ThinkPad X1 Fold 16 Gen 1 on Omarchy 4. Other kernels, Hyprland builds, firmware, and accessories can behave differently.
+
 ![X1 Fold settings panel](screenshots/panel.png)
 
 <p align="center"><sub>Settings panel (Tokyo Night). Left-click the bar widget to open it.</sub></p>
@@ -133,7 +135,7 @@ The panel slider steps by 5 px, with − / + on either side. The same value is `
 
 The ThinkPad TrackPoint Keyboard presents as an external HID on Bluetooth (`17ef:613e`, `X1FKeyboard`) and USB-C (`17ef:6142`, Primax). Stock libinput will not suppress its touchpad or TrackPoint while typing. The plugin’s Hyprland device block turns disable-while-typing on those pointers (both bus names) and uses a slower key-repeat. Tap-to-click stays on. `./setup.sh --boot` also installs a libinput quirk (`/etc/libinput/local-overrides.quirks`) plus a udev hwdb/rule that marks the keyboard and touchpad internal so typing actually pairs with those pointers.
 
-USB-C DWT (internal keyboard/touchpad tagging, Primax USB device names) follows [harshach/x1fold](https://github.com/harshach/x1fold). Grok helped adapt that for this Omarchy 4 plugin. Your mileage may vary: firmware, Hyprland, and cable vs Bluetooth can change device names and udev integration tags.
+USB-C DWT (internal keyboard/touchpad tagging, Primax USB device names) follows [harshach/x1fold](https://github.com/harshach/x1fold).
 
 Squeekboard is started with the session (`SQUEEKBOARD_FORCE=1` so it is allowed on a non-phone form factor). Super+Alt+R shows or hides it.
 
@@ -188,7 +190,8 @@ omarchy restart shell
 
 ## Credits
 
-[harshach/x1fold](https://github.com/harshach/x1fold) for the folio USB-C disable-while-typing approach (mark the keyboard and touchpad internal; match the Primax USB names). Adapted here with Grok. YMMV.
+- [harshach/x1fold](https://github.com/harshach/x1fold) — USB-C disable-while-typing (mark the keyboard and touchpad internal; match the Primax USB names)
+- Grok — help throughout this plugin
 
 ## License
 
