@@ -152,7 +152,7 @@ The root filesystem is encrypted. After pairing the ThinkPad keyboard in the run
 
 That copies a `bluetoothkbd` mkinitcpio hook (before `encrypt`), includes `/var/lib/bluetooth` pairing data, the Intel CNVi firmware this adapter loads at runtime (`intel/ibt-0040-0041.sfi`), the `uhid` module BLE HID needs, enables `AutoEnable` in `bluetoothd`, and rebuilds the initramfs.
 
-Unplug USB-C before the passphrase prompt. This folio switches to USB HID when the cable is in, and Bluetooth goes idle. With the cable out, the splash waits up to about 12 seconds for the keyboard to reconnect over BLE. USB still works as a fallback if you plug it in, or if Bluetooth is slow.
+Unplug USB-C before the passphrase prompt. This folio switches to USB HID when the cable is in, and Bluetooth goes idle. With the cable out, Plymouth shows **Waiting for Bluetooth keyboard** with a countdown, then **Bluetooth keyboard connected** or **Bluetooth keyboard not connected**. That status stays on the splash through the passphrase prompt. USB still works as a fallback if you plug it in, or if Bluetooth is slow.
 
 ## Book mode (not implemented)
 

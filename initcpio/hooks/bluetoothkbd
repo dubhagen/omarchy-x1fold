@@ -3,10 +3,10 @@
 # keyboard before the encrypt prompt. This keyboard is HOGP (BLE HID),
 # which needs /dev/uhid — classic hidp is not enough.
 
-bt_msg() {
+ply_msg() {
 	msg "$1"
-	if command -v plymouth >/dev/null; then
-		plymouth display-message --text="$1" 2>/dev/null || true
+	if command -v plymouth >/dev/null && plymouth --ping 2>/dev/null; then
+		plymouth display-message --text="$1" || true
 	fi
 }
 
@@ -46,9 +46,15 @@ connect_paired_hid() {
 		grep -q 'Trusted=true' "$info" || continue
 		addr=${info%/*}
 		addr=${addr##*/}
-		bt_msg ":: Connecting Bluetooth keyboard $addr..."
+		msg ":: Connecting Bluetooth keyboard $addr..."
 		bluetoothctl connect "$addr" >/dev/null 2>&1 || true
 	done
+}
+
+keyboard_connected() {
+	ply_msg "Bluetooth keyboard connected"
+	# Leave the status on the splash through the passphrase prompt.
+	sleep 1
 }
 
 run_earlyhook() {
@@ -65,12 +71,18 @@ run_hook() {
 	# USB-C takes over this folio and BLE goes idle. Don't delay LUKS
 	# when the user already has a working USB keyboard.
 	if usb_folio_present; then
-		msg ":: USB folio keyboard present; not waiting for Bluetooth"
+		ply_msg "USB keyboard connected"
 		return 0
 	fi
 
+	ply_msg "Waiting for Bluetooth keyboard..."
+
 	n=0
 	while [ "$n" -lt 10 ]; do
+		if ble_keyboard_ready; then
+			keyboard_connected
+			return 0
+		fi
 		if bluetoothctl show 2>/dev/null | grep -q 'Powered: yes'; then
 			break
 		fi
@@ -84,18 +96,21 @@ run_hook() {
 	n=0
 	while [ "$n" -lt 12 ]; do
 		if ble_keyboard_ready; then
-			bt_msg ":: Bluetooth keyboard ready"
+			keyboard_connected
 			return 0
 		fi
+		left=$((12 - n))
+		ply_msg "Waiting for Bluetooth keyboard (${left}s)"
 		sleep 1
 		n=$((n + 1))
 	done
-	bt_msg ":: Bluetooth keyboard not ready; USB still works at the passphrase prompt"
+	ply_msg "Bluetooth keyboard not connected"
+	sleep 2
 }
 
 run_cleanuphook() {
-	if command -v plymouth >/dev/null; then
-		plymouth hide-message 2>/dev/null || true
+	if command -v plymouth >/dev/null && plymouth --ping 2>/dev/null; then
+		plymouth hide-message || true
 	fi
 	killall bluetoothd 2>/dev/null
 	killall dbus-daemon 2>/dev/null
