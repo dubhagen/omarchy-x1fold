@@ -281,14 +281,35 @@ Item {
     return false
   }
 
+  function panelScreenName(item) {
+    try {
+      if (item && item.screen && item.screen.name)
+        return String(item.screen.name)
+    } catch (e) {}
+    return ""
+  }
+
+  function isFoldBackground(item) {
+    if (root.layerNamespace(item) !== "omarchy-background")
+      return false
+    var name = root.panelScreenName(item)
+    return name === "" || name.indexOf("eDP") === 0
+  }
+
   function skipOverlay(item) {
     var ns = root.layerNamespace(item)
-    if (ns === "mattd-x1fold-mask" || ns === "omarchy-background" || ns === "omarchy-bar")
+    if (ns === "mattd-x1fold-mask" || ns === "omarchy-bar")
       return true
     if (ns.indexOf("omarchy-bar-") === 0)
       return true
     if (ns.indexOf("lock") !== -1 || ns.indexOf("screensaver") !== -1)
       return true
+    // Inset the fold wallpaper to the visible half so PreserveAspectCrop
+    // fills the clamshell crop, not the full portrait OLED.
+    if (ns === "omarchy-background") {
+      var name = root.panelScreenName(item)
+      return name !== "" && name.indexOf("eDP") !== 0
+    }
     if (root.layerIsBackground(item))
       return true
     return false
@@ -438,7 +459,9 @@ Item {
         })
         // Newly mapped overlays sometimes ignore margins until the bottom
         // anchor is dropped. implicitHeight then sizes the surface.
-        if (visible && Math.abs(item.height - usable) > 16) {
+        // Wallpaper must track overlap 5px steps, so allow no slop there.
+        var slop = root.isFoldBackground(item) ? 0 : 16
+        if (visible && Math.abs(item.height - usable) > slop) {
           root.setPanelAnchors(item, {
             top: true,
             bottom: false,
@@ -453,7 +476,7 @@ Item {
           })
           try { item.implicitHeight = usable } catch (e2) {}
         }
-        st.bounded = !visible || Math.abs(item.height - usable) <= 16
+        st.bounded = !visible || Math.abs(item.height - usable) <= Math.max(slop, 1)
         if ("cardTop" in item && st.bounded && item.cardTop !== -1)
           item.cardTop = -1
         return st.bounded
@@ -562,7 +585,7 @@ Item {
         fn(svcs[id])
     } catch (e2) {
       if (typeof root.shell.serviceFor === "function") {
-        var names = ["omarchy.notifications", "omarchy.osd", "omarchy.polkit"]
+        var names = ["omarchy.notifications", "omarchy.osd", "omarchy.polkit", "omarchy.background"]
         for (var si = 0; si < names.length; si++)
           fn(root.shell.serviceFor(names[si]))
       }
@@ -636,6 +659,156 @@ Item {
     return out
   }
 
+  function backgroundService() {
+    try {
+      if (root.shell && typeof root.shell.serviceFor === "function") {
+        var svc = root.shell.serviceFor("omarchy.background")
+        if (svc)
+          return svc
+      }
+    } catch (e) {}
+    try {
+      if (root.shell && root.shell._services)
+        return root.shell._services["omarchy.background"] || null
+    } catch (e2) {}
+    return null
+  }
+
+  function collectBackgroundPanels() {
+    var found = []
+    var seen = []
+    function add(node) {
+      if (!node)
+        return
+      for (var s = 0; s < seen.length; s++)
+        if (seen[s] === node)
+          return
+      seen.push(node)
+      if (root.layerNamespace(node) === "omarchy-background" || root.isLayerPanel(node) && root.layerIsBackground(node))
+        found.push(node)
+    }
+    function walk(node, depth) {
+      if (!node || depth > 8)
+        return
+      add(node)
+      try {
+        var inst = node.instances
+        if (inst) {
+          for (var i = 0; i < inst.length; i++)
+            walk(inst[i], depth + 1)
+        }
+      } catch (e1) {}
+      try {
+        var d = node.data
+        if (d) {
+          for (var j = 0; j < d.length; j++)
+            walk(d[j], depth + 1)
+        }
+      } catch (e2) {}
+      try {
+        var kids = node.children
+        if (kids) {
+          for (var k = 0; k < kids.length; k++)
+            walk(kids[k], depth + 1)
+        }
+      } catch (e3) {}
+      try { if (node.item) walk(node.item, depth + 1) } catch (e4) {}
+    }
+    walk(root.backgroundService(), 0)
+    var layers = root.collectLayerPanels()
+    for (var p = 0; p < layers.length; p++)
+      add(layers[p])
+    return found
+  }
+
+  property var bgChildOrig: []
+
+  function bgChildState(item) {
+    var list = root.bgChildOrig
+    for (var i = 0; i < list.length; i++)
+      if (list[i].item === item)
+        return list[i]
+    var st = { item: item, orig: null }
+    list.push(st)
+    return st
+  }
+
+  function isRemapGuard(item) {
+    try {
+      return item && item.remapping !== undefined && item.window !== undefined
+    } catch (e) {
+      return false
+    }
+  }
+
+  // Hyprland may keep Background-layer surfaces full-output even with
+  // margins. Crop the wallpaper images to the visible half so
+  // PreserveAspectCrop fills the clamshell rect; overlap changes usable.
+  function applyBackgroundContent(panel, inset, usable) {
+    var kids
+    try { kids = panel.children } catch (e) { return }
+    if (!kids)
+      return
+    for (var i = 0; i < kids.length; i++) {
+      var child = kids[i]
+      if (!child || root.isRemapGuard(child))
+        continue
+      var st = root.bgChildState(child)
+      if (!st.orig) {
+        try {
+          var a = child.anchors
+          st.orig = {
+            fill: !!(a && a.fill),
+            top: !!(a && a.top),
+            bottom: !!(a && a.bottom),
+            left: !!(a && a.left),
+            right: !!(a && a.right)
+          }
+        } catch (e1) {
+          continue
+        }
+      }
+      try {
+        if (inset > 0) {
+          try { child.anchors.fill = undefined } catch (e2) {}
+          try { child.anchors.bottom = false } catch (e3) {}
+          try { child.anchors.top = true } catch (e4) {}
+          try { child.anchors.left = true } catch (e5) {}
+          try { child.anchors.right = true } catch (e6) {}
+          child.height = usable
+        } else {
+          var orig = st.orig
+          if (orig.fill) {
+            try { child.anchors.fill = child.parent } catch (e7) {}
+          } else {
+            try { child.anchors.top = orig.top } catch (e8) {}
+            try { child.anchors.bottom = orig.bottom } catch (e9) {}
+            try { child.anchors.left = orig.left } catch (e10) {}
+            try { child.anchors.right = orig.right } catch (e11) {}
+          }
+        }
+      } catch (e12) {}
+    }
+  }
+
+  function constrainBackgrounds() {
+    var inset = root.reservedLogical
+    var panels = root.collectBackgroundPanels()
+    for (var i = 0; i < panels.length; i++) {
+      var panel = panels[i]
+      if (!root.isFoldBackground(panel) && root.layerNamespace(panel) !== "omarchy-background")
+        continue
+      if (!root.isFoldBackground(panel) && root.panelScreenName(panel) !== "" && root.panelScreenName(panel).indexOf("eDP") !== 0)
+        continue
+      var screenH = root.panelScreenHeight(panel)
+      if (!screenH)
+        continue
+      var usable = Math.max(1, screenH - inset)
+      root.applyPanelBoundary(panel)
+      root.applyBackgroundContent(panel, inset, usable)
+    }
+  }
+
   function constrainOverlays() {
     var panels = root.collectLayerPanels()
     for (var i = 0; i < panels.length; i++) {
@@ -649,6 +822,7 @@ Item {
         }
       } catch (e) {}
     }
+    root.constrainBackgrounds()
   }
 
   function handleHyprlandEvent(event) {
@@ -718,6 +892,7 @@ Item {
   onClamshellChanged: root.requestOverlayConstrain()
   onCoverRatioChanged: root.requestOverlayConstrain()
   onOverlapPxChanged: root.requestOverlayConstrain()
+  onReservedLogicalChanged: root.requestOverlayConstrain()
 
   Timer {
     id: restoreTimer

@@ -20,6 +20,7 @@ Built with help from Grok. Your mileage may vary: this is one ThinkPad X1 Fold 1
 - In clamshell only, Super+F, YouTube, and other fullscreen clients use that same half-panel float (cinema mode to the app, no compositor gaps). The bar parks for the duration. Exit tiles the window back into its original split, restores the focus border, and brings the bar back. Outside clamshell, Super+F is stock covering fullscreen.
 - Paints the covered half true black (`#000000`) on an Overlay layer so those OLED pixels turn off
 - Swallows input on the covered half
+- Scales the Omarchy theme wallpaper to the visible half (`PreserveAspectCrop` on that rectangle, including overlap). Full panel leaves the stock full-output wallpaper.
 - Turns the on-screen keyboard off (you already have hardware keys)
 
 There is no xrandr-style crop on this panel. The Wayland equivalent is `hl.monitor({ mode = "…" })`, but the OLED only advertises `2024×2560@60`, and Intel’s scaler can only Full / Center / Full-aspect a smaller mode — it cannot pin a half-height framebuffer to the top. So clamshell is a compositor reserved region plus a true-black overlay, not a different video mode.
