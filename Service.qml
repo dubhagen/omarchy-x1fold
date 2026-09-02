@@ -835,6 +835,8 @@ Item {
       var next = Object.assign({}, root.screensaverWindows)
       next[String(parts[0] || "")] = true
       root.screensaverWindows = next
+      ssProc.command = [root.script, "osk", "park"]
+      ssProc.running = true
       if (root.clamshell) {
         root.ssDismissing = false
         root.ssDismissArmed = false

@@ -148,7 +148,7 @@ USB-C DWT (internal keyboard/touchpad tagging, Primax USB device names) follows 
 
 The tablet OSK is [wvkbd](https://github.com/jjsullivan5196/wvkbd) built as `wvkbd-deskintl`: a PC-shaped board (Shift as a real modifier, number row, Ctrl, Super, Alt, Tab, Esc, F-keys). Super+Alt+R shows or hides it. It is forced off while clamshell is on — that posture already has a hardware keyboard — and the panel toggle is greyed out in that mode.
 
-`setup.sh` builds it into `~/.local/bin/wvkbd-deskintl`. The plugin starts it on demand (no session autostart) and restores it after `x1fold apply` if it was left on. Portrait height is 520 logical pixels, landscape 400. The layer namespace is `wvkbd`. Hyprland gives it an exclusive zone so tiled windows sit above the keys. The virtual keyboard is `share_states = 0` and `keybinds = false` so Shift is not shared with the hardware keyboard and Backspace does not fire Super+Backspace. Hide tears the process down so unreleased OSK keys cannot leak into the folio keyboard.
+`setup.sh` builds it into `~/.local/bin/wvkbd-deskintl`. The plugin starts it on demand (no session autostart) and restores it after `x1fold apply` if it was left on. The overlay is hidden (SIGUSR1) while the screensaver is up so it cannot paint above the saver, and shown again afterwards if it was on. Portrait height is 520 logical pixels, landscape 400. The layer namespace is `wvkbd`. Hyprland gives it an exclusive zone so tiled windows sit above the keys. The virtual keyboard is `share_states = 0` and `keybinds = false` so Shift is not shared with the hardware keyboard and Backspace does not fire Super+Backspace. Hide tears the process down so unreleased OSK keys cannot leak into the folio keyboard.
 
 ## Bluetooth keyboard at the LUKS prompt
 

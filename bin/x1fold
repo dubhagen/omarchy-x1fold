@@ -404,8 +404,10 @@ def apply(state: dict, quiet: bool = False) -> dict:
         set_osk(False, persist=False)
         state["osk"] = False
         save_state(state)
-    elif state.get("osk") and not osk_running():
-        set_osk_visible(True)
+    elif screensaver_running():
+        hide_osk_surface()
+    elif state.get("osk"):
+        show_osk_surface()
     constrain_fullscreen(state)
     sync_bar(state)
     if not quiet:
@@ -1383,6 +1385,24 @@ def stop_osk_process() -> None:
         time.sleep(0.05)
 
 
+def hide_osk_surface() -> None:
+    """Hide the layer without destroying the virtual keyboard.
+
+    Killing wvkbd releases keys into the seat, which dismisses the
+    screensaver. SIGUSR1 only tears down the overlay surface.
+    """
+    if not osk_running():
+        return
+    run(["pkill", "-USR1", "-x", WVKBD_NAME], check=False)
+
+
+def show_osk_surface() -> None:
+    if osk_running():
+        run(["pkill", "-USR2", "-x", WVKBD_NAME], check=False)
+        return
+    set_osk_visible(True)
+
+
 def ensure_osk_process() -> None:
     if osk_running():
         return
@@ -1483,6 +1503,14 @@ def cmd_overlap(state: dict, token: str) -> int:
 
 
 def cmd_osk(state: dict, token: str) -> int:
+    key = token.strip().lower()
+    if key == "park":
+        hide_osk_surface()
+        return 0
+    if key in {"unpark", "restore"}:
+        if state.get("osk") and not state.get("clamshell") and not screensaver_running():
+            show_osk_surface()
+        return 0
     wanted = parse_bool(token, bool(state.get("osk")))
     if wanted and state["clamshell"]:
         fail("on-screen keyboard is hidden while clamshell is on")
@@ -1508,6 +1536,11 @@ def cmd_daemon(_state: dict) -> int:
         now = time.monotonic()
         saver = screensaver_running()
         if saver:
+            if not saw_screensaver:
+                try:
+                    hide_osk_surface()
+                except SystemExit:
+                    pass
             saw_screensaver = True
             pending_transform = None
             time.sleep(0.35)

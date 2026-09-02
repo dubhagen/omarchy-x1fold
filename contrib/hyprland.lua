@@ -3,10 +3,9 @@ hl.layer_rule({ match = { namespace = "mattd-x1fold-mask" }, no_anim = true, ani
 hl.layer_rule({ match = { namespace = "mattd-x1fold-ss-dismiss" }, no_anim = true, animation = "none", order = 50 })
 hl.layer_rule({ match = { namespace = "^wvkbd$" }, no_anim = true })
 
--- Clamshell only: covering-fullscreen uses the whole OLED and ignores
--- reserved_area. The screensaver maps already sized to the visible half
--- (TTE measures that pty). Size/move are refreshed from `x1fold apply`.
--- Outside clamshell, apply restores Omarchy's stock fullscreen + slide.
+-- Default is Omarchy's covering-fullscreen + slide. Clamshell apply()
+-- evals this named rule to a half-panel float; leaving tablet as
+-- fullscreen=false made the saver a tiny floating window.
 hl.window_rule({
   name = "mattd.x1fold-screensaver",
   match = { class = "org.omarchy.screensaver" },
@@ -15,9 +14,9 @@ hl.window_rule({
   no_shadow = true,
   border_size = 0,
   no_max_size = true,
-  no_anim = true,
   float = true,
-  fullscreen = false,
+  fullscreen = true,
+  animation = "slide",
 })
 hl.window_rule({
   name = "mattd.x1fold-edge-fs",
@@ -41,15 +40,17 @@ local function x1fold_placing()
   return false
 end
 
-local function x1fold_clamshell(mon)
-  if mon == nil then
+local function x1fold_clamshell(_mon)
+  -- Do not use reserved.bottom: the OSK exclusive zone is also a bottom
+  -- reserve, and treating it as clamshell floats the screensaver.
+  local path = (os.getenv("HOME") or "") .. "/.local/state/omarchy/x1fold/state.json"
+  local file = io.open(path, "r")
+  if not file then
     return false
   end
-  local reserved = mon.reserved
-  if type(reserved) ~= "table" then
-    return false
-  end
-  return (tonumber(reserved.bottom) or 0) > 0
+  local body = file:read("*a") or ""
+  file:close()
+  return string.find(body, '"clamshell"%s*:%s*true') ~= nil
 end
 
 local function x1fold_has_tag(w, name)
@@ -97,6 +98,9 @@ hl.on("window.open", function(w)
   if w == nil or w.class ~= "org.omarchy.screensaver" then
     return
   end
+  -- Park the OSK overlay so it cannot paint above the saver. SIGUSR1,
+  -- not a process kill (that releases keys and dismisses the saver).
+  hl.dispatch(hl.dsp.exec_cmd(x1fold .. " osk park"))
   if not x1fold_clamshell(w.monitor) then
     x1fold_ss_submap(false)
     return
