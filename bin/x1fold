@@ -31,12 +31,14 @@ import shutil
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 PLUGIN_ID = "mattd.x1fold"
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 STATE_DIR = HOME / ".local" / "state" / "omarchy" / "x1fold"
 STATE_PATH = STATE_DIR / "state.json"
+STATE_LOCK = STATE_DIR / "state.lock"
 MONITORS_LUA = Path(os.environ.get("OMARCHY_MONITORS_LUA", HOME / ".config" / "hypr" / "monitors.lua"))
 BEGIN_MARK = "-- mattd.x1fold: begin"
 END_MARK = "-- mattd.x1fold: end"
@@ -141,9 +143,26 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(state, indent=2) + "\n"
+    if STATE_PATH.exists() and STATE_PATH.read_text() == payload:
+        return
     tmp = STATE_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(state, indent=2) + "\n")
+    tmp.write_text(payload)
     tmp.replace(STATE_PATH)
+
+
+@contextmanager
+def locked_state():
+    """Serialize load-mutate-apply so the daemon cannot overwrite a live command."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with STATE_LOCK.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield load_state()
+
+
+def run_locked(fn, *args):
+    with locked_state() as state:
+        return fn(state, *args)
 
 
 def hypr_monitors() -> list[dict]:
@@ -234,12 +253,14 @@ def persist_lua(lua: str) -> None:
     block = f"{BEGIN_MARK}\n{lua}\n{END_MARK}\n"
     pattern = re.compile(re.escape(BEGIN_MARK) + r".*?" + re.escape(END_MARK) + r"\n?", re.S)
     if pattern.search(text):
-        text = pattern.sub(block, text, count=1)
+        updated = pattern.sub(block, text, count=1)
     else:
-        if text and not text.endswith("\n"):
-            text += "\n"
-        text += "\n" + block
-    MONITORS_LUA.write_text(text)
+        updated = text
+        if updated and not updated.endswith("\n"):
+            updated += "\n"
+        updated += "\n" + block
+    if updated != text:
+        MONITORS_LUA.write_text(updated)
 
 
 def sync_arrange_transform(mon: dict, transform: int) -> None:
@@ -256,7 +277,7 @@ def sync_arrange_transform(mon: dict, transform: int) -> None:
         count=1,
         flags=re.S,
     )
-    if n:
+    if n and updated != text:
         MONITORS_LUA.write_text(updated)
 
 
@@ -1382,14 +1403,13 @@ def cmd_tablet(state: dict) -> int:
     return 0
 
 
-def cmd_daemon(state: dict) -> int:
+def cmd_daemon(_state: dict) -> int:
     pending_transform: int | None = None
     pending_since = 0.0
     last_apply = 0.0
     resume_until = 0.0
     saw_screensaver = False
     while True:
-        state = load_state()
         now = time.monotonic()
         saver = screensaver_running()
         if saver:
@@ -1401,56 +1421,55 @@ def cmd_daemon(state: dict) -> int:
             saw_screensaver = False
             resume_until = now + 4.0
             try:
-                apply(state, quiet=True)
-                last_apply = now
+                with locked_state() as state:
+                    apply(state, quiet=True)
+                last_apply = time.monotonic()
             except SystemExit:
                 pass
 
-        changed = False
-        if state.get("autorotate") and now >= resume_until:
-            guessed = orientation_from_accel()
-            current = int(state["transform"])
-            if guessed is None or guessed == current:
-                pending_transform = None
-            elif guessed != pending_transform:
-                pending_transform = guessed
-                pending_since = now
-            elif now - pending_since >= 1.2:
-                if state["clamshell"] and not is_portrait(guessed):
-                    pass
-                else:
-                    state["transform"] = guessed
-                    if state["clamshell"] and not is_portrait(guessed):
-                        state["clamshell"] = False
-                    changed = True
-                pending_transform = None
+        try:
+            with locked_state() as state:
+                now = time.monotonic()
+                changed = False
+                if state.get("autorotate") and now >= resume_until:
+                    guessed = orientation_from_accel()
+                    current = int(state["transform"])
+                    if guessed is None or guessed == current:
+                        pending_transform = None
+                    elif guessed != pending_transform:
+                        pending_transform = guessed
+                        pending_since = now
+                    elif now - pending_since >= 1.2:
+                        if not (state["clamshell"] and not is_portrait(guessed)):
+                            state["transform"] = guessed
+                            changed = True
+                        pending_transform = None
 
-        if state.get("autoclamshell"):
-            hinge = hinge_degrees()
-            angle = hinge.get("hinge")
-            if angle is not None and angle != 0:
-                folded = 70.0 <= angle <= 140.0
-                if folded and is_portrait(int(state["transform"])) and not state["clamshell"]:
-                    state["clamshell"] = True
-                    changed = True
-                elif (not folded) and state["clamshell"] and angle < 30:
-                    state["clamshell"] = False
-                    changed = True
+                if state.get("autoclamshell"):
+                    hinge = hinge_degrees()
+                    angle = hinge.get("hinge")
+                    if angle is not None and angle != 0:
+                        folded = 70.0 <= angle <= 140.0
+                        if folded and is_portrait(int(state["transform"])) and not state["clamshell"]:
+                            state["clamshell"] = True
+                            changed = True
+                        elif (not folded) and state["clamshell"] and angle < 30:
+                            state["clamshell"] = False
+                            changed = True
 
-        if not changed and now - last_apply > 0.8:
-            try:
-                mon = pick_monitor(state)
-                if not monitor_matches(state, mon):
-                    changed = True
-            except SystemExit:
-                pass
+                if not changed and now - last_apply > 0.8:
+                    try:
+                        mon = pick_monitor(state)
+                        if not monitor_matches(state, mon):
+                            changed = True
+                    except SystemExit:
+                        pass
 
-        if changed and now - last_apply > 0.35:
-            try:
-                apply(state, quiet=True)
-                last_apply = now
-            except SystemExit:
-                pass
+                if changed and now - last_apply > 0.35:
+                    apply(state, quiet=True)
+                    last_apply = now
+        except SystemExit:
+            pass
 
         time.sleep(0.35)
 
@@ -1465,66 +1484,67 @@ def main(argv: list[str]) -> int:
         print(usage())
         return 0
     cmd = args[0]
-    state = load_state()
     if cmd == "status":
-        return cmd_status(state)
+        return cmd_status(load_state())
     if cmd == "rotate":
         if len(args) < 2:
             fail("rotate needs an orientation")
-        return cmd_rotate(state, args[1])
+        return run_locked(cmd_rotate, args[1])
     if cmd == "clamshell":
         if len(args) < 2:
             fail("clamshell needs on|off|toggle")
-        return cmd_clamshell(state, args[1])
+        return run_locked(cmd_clamshell, args[1])
     if cmd == "autorotate":
         if len(args) < 2:
             fail("autorotate needs on|off|toggle")
-        return cmd_flag(state, "autorotate", args[1])
+        return run_locked(cmd_flag, "autorotate", args[1])
     if cmd == "autoclamshell":
         if len(args) < 2:
             fail("autoclamshell needs on|off|toggle")
-        return cmd_flag(state, "autoclamshell", args[1])
+        return run_locked(cmd_flag, "autoclamshell", args[1])
     if cmd == "osk":
         if len(args) < 2:
             fail("osk needs on|off|toggle")
-        return cmd_osk(state, args[1])
+        return run_locked(cmd_osk, args[1])
     if cmd == "cover-ratio":
         if len(args) < 2:
             fail("cover-ratio needs a number")
-        return cmd_cover_ratio(state, args[1])
+        return run_locked(cmd_cover_ratio, args[1])
     if cmd == "overlap":
         if len(args) < 2:
             fail("overlap needs a pixel count")
-        return cmd_overlap(state, args[1])
+        return run_locked(cmd_overlap, args[1])
     if cmd in {"mini-laptop", "laptop"}:
-        return cmd_clamshell(state, "on")
+        return run_locked(cmd_clamshell, "on")
     if cmd == "tablet":
-        return cmd_tablet(state)
+        return run_locked(cmd_tablet)
     if cmd == "apply":
-        apply(state, quiet=True)
-        if "--notify" in args[1:]:
-            announce(state)
-        return 0
+        def _apply(state: dict) -> int:
+            apply(state, quiet=True)
+            if "--notify" in args[1:]:
+                announce(state)
+            return 0
+        return run_locked(_apply)
     if cmd == "constrain-fullscreen":
-        return cmd_constrain_fullscreen(state, args[1] if len(args) > 1 else None)
+        return run_locked(cmd_constrain_fullscreen, args[1] if len(args) > 1 else None)
     if cmd == "fullscreen":
-        return cmd_fullscreen(
-            state,
+        return run_locked(
+            cmd_fullscreen,
             args[1] if len(args) > 1 else "toggle",
             args[2] if len(args) > 2 else None,
         )
     if cmd == "constrain-screensaver":
-        return cmd_constrain_screensaver(state, args[1] if len(args) > 1 else None)
+        return run_locked(cmd_constrain_screensaver, args[1] if len(args) > 1 else None)
     if cmd == "dismiss-screensaver":
-        return cmd_dismiss_screensaver(state)
+        return run_locked(cmd_dismiss_screensaver)
     if cmd == "sync-bar":
-        return cmd_sync_bar(state)
+        return run_locked(cmd_sync_bar)
     if cmd == "cursor":
         if len(args) < 2:
             fail("cursor needs hide|show")
-        return cmd_cursor(state, args[1])
+        return run_locked(cmd_cursor, args[1])
     if cmd == "daemon":
-        return cmd_daemon(state)
+        return cmd_daemon({})
     fail(f"unknown command: {cmd}\n{usage()}")
 
 

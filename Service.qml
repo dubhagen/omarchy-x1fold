@@ -723,7 +723,11 @@ Item {
     id: restoreTimer
     interval: 400
     repeat: false
-    onTriggered: if (!root.screensaverOpen()) applyProc.running = true
+    onTriggered: {
+      if (root.screensaverOpen() || applyProc.running)
+        return
+      applyProc.running = true
+    }
   }
 
   Timer {

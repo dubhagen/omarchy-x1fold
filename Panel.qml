@@ -76,6 +76,7 @@ Panel {
 
   function applyStateText(text) {
     try {
+      if (root.cmdBusy) return
       var data = JSON.parse(text || "{}")
       root.orientationIndex = Number(data.transform || 0)
       root.clamshell = data.clamshell === true
@@ -102,12 +103,13 @@ Panel {
   }
 
   function run(args) {
-    if (cmdProc.running) return
+    if (cmdProc.running) return false
     cmdBusy = true
     var argv = [root.script]
     for (var i = 0; i < args.length; i++) argv.push(args[i])
     cmdProc.command = argv
     cmdProc.running = true
+    return true
   }
 
   FileView {
@@ -125,6 +127,7 @@ Panel {
       waitForEnd: true
       onStreamFinished: {
         try {
+          if (root.cmdBusy) return
           var data = JSON.parse(text)
           root.orientationIndex = Number(data.transform || 0)
           root.clamshell = data.clamshell === true
@@ -218,7 +221,11 @@ Panel {
                 checked: root.clamshell
                 busy: root.cmdBusy
                 foreground: root.fg
-                onToggled: root.run(["clamshell", "toggle"])
+                onToggled: {
+                  var wanted = !root.clamshell
+                  if (root.run(["clamshell", wanted ? "on" : "off"]))
+                    root.clamshell = wanted
+                }
               }
             }
           }
