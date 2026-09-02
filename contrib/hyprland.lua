@@ -1,6 +1,6 @@
 -- OLED keyboard-half mask: no fade, stay put.
 hl.layer_rule({ match = { namespace = "mattd-x1fold-mask" }, no_anim = true, animation = "none" })
-hl.layer_rule({ match = { namespace = "^(squeekboard|osksqueekboard)$" }, no_anim = true })
+hl.layer_rule({ match = { namespace = "^(osk|squeekboard|osksqueekboard)$" }, no_anim = true })
 hl.env("SQUEEKBOARD_FORCE", "1")
 
 -- Clamshell only: covering-fullscreen uses the whole OLED and ignores

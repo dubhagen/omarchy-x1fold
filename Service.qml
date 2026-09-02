@@ -300,6 +300,8 @@ Item {
     var ns = root.layerNamespace(item)
     if (ns === "mattd-x1fold-mask" || ns === "omarchy-bar")
       return true
+    if (ns === "osk" || ns === "squeekboard" || ns === "osksqueekboard")
+      return true
     if (ns.indexOf("omarchy-bar-") === 0)
       return true
     if (ns.indexOf("lock") !== -1 || ns.indexOf("screensaver") !== -1)

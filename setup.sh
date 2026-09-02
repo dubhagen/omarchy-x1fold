@@ -71,6 +71,7 @@ text = path.read_text() if path.exists() else ""
 for needle in (
     'local x1fold = os.getenv("HOME") .. "/.config/omarchy/plugins/mattd.x1fold/bin/x1fold"',
     'o.launch_on_start("squeekboard")',
+    'o.launch_on_start("env -u GDK_SCALE -u GDK_DPI_SCALE squeekboard")',
     'namespace = "mattd-x1fold-mask"',
     'hl.env("SQUEEKBOARD_FORCE", "1")',
 ):
@@ -247,6 +248,23 @@ install_power_overlay() {
   log "dual-battery overlay installed on ${POWER_ID} (separate from ${PLUGIN_ID})"
 }
 
+install_squeek_layouts() {
+  local src="$REPO/contrib/squeekboard/keyboards"
+  local dst="${HOME}/.local/share/squeekboard/keyboards"
+  [[ -d $src ]] || return 0
+  mkdir -p "$dst/terminal"
+  local f
+  for f in "$src"/*.yaml "$src"/terminal/*.yaml; do
+    [[ -f $f ]] || continue
+    install -m 644 "$f" "$dst/${f#"$src"/}"
+  done
+  log "Squeekboard layouts → $dst (virtual-keyboard Backspace/numbers)"
+  if command -v gsettings >/dev/null; then
+    gsettings set sm.puri.Squeekboard scale-in-vertical-screen-orientation 1.6 || true
+    gsettings set sm.puri.Squeekboard scale-in-horizontal-screen-orientation 1.6 || true
+  fi
+}
+
 install_desktop() {
   mkdir -p "$HYPR" "$(dirname "$MENU")"
   patch_marked_lua "$HYPR/bindings.lua" "$REPO/contrib/bindings.lua"
@@ -255,6 +273,7 @@ install_desktop() {
   patch_marked_lua "$HYPR/input.lua" "$REPO/contrib/input.lua"
   mkdir -p "${HOME}/.config/libinput"
   install -m 644 "$REPO/contrib/libinput-x1fold.quirks" "${HOME}/.config/libinput/local-overrides.quirks"
+  install_squeek_layouts
   merge_menu "$MENU"
   log "Hyprland bindings, autostart, layer rules, keyboard input, and menu entries installed"
 }

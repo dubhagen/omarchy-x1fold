@@ -264,21 +264,32 @@ def touch_lua(transform: int, output: str) -> str:
     """Keep Wacom finger/pen mapped to the OLED rotation.
 
     Hyprland's default input:touchdevice:transform is 0, not "follow the
-    monitor", so rotating the panel leaves taps in native portrait space.
+    monitor", so a landscape panel still sees taps in native portrait space.
+
+    Do not bind output. Mapping the digitizer to eDP-1 puts taps in the
+    usable layout box (minus bar/OSK exclusive zones). The bar then gets
+    no touches, and OSK taps land on the window. Leave output Auto.
+
+    Do not write transform 0. An explicit 0 is "set" and replaces the live
+    libinput matrix with identity. This panel has no udev calibration
+    matrix; once that live matrix is replaced, hyprctl reload cannot
+    restore the native mapping and the bar misses taps. Recreating the
+    Wacom HID (i2c-WACF2200:00 unbind/rebind) does. Only write a transform
+    when the OLED is actually rotated.
     """
     t = int(transform) % 8
-    out = lua_escape(output or "eDP-1")
+    _ = output
+    if t == 0:
+        return ""
     lines = [
         "hl.config({ input = { "
-        f'touchdevice = {{ transform = {t}, output = "{out}" }}, '
-        f'tablet = {{ transform = {t}, output = "{out}" }} '
+        f"touchdevice = {{ transform = {t} }}, "
+        f"tablet = {{ transform = {t} }} "
         "} })"
     ]
     for name in hypr_digitizer_names():
         n = lua_escape(name)
-        lines.append(
-            f'hl.device({{ name = "{n}", transform = {t}, output = "{out}" }})'
-        )
+        lines.append(f'hl.device({{ name = "{n}", transform = {t} }})')
     return "\n".join(lines)
 
 
@@ -376,8 +387,16 @@ def apply(state: dict, quiet: bool = False) -> dict:
     lua = monitor_lua(mon, transform, bottom)
     touch = touch_lua(transform, str(mon.get("name") or "eDP-1"))
     eval_monitor(lua)
-    eval_lua(touch)
-    persist_lua(lua + "\n" + touch)
+    if touch:
+        eval_lua(touch)
+    old_lua = MONITORS_LUA.read_text() if MONITORS_LUA.exists() else ""
+    body = lua + (("\n" + touch) if touch else "")
+    persist_lua(body)
+    # Returning to native portrait drops the touchdevice block. Reload so
+    # Hyprland unsets the rotated calibration. Do not write transform=0
+    # instead: that stays "set" and poisons the live matrix.
+    if "touchdevice" in old_lua and "touchdevice" not in body:
+        run(["hyprctl", "reload"], check=False)
     sync_arrange_transform(mon, transform)
     eval_screensaver_rule(state, mon, bottom)
     save_state(state)
@@ -1336,17 +1355,114 @@ def monitor_matches(state: dict, mon: dict) -> bool:
 
 
 def osk_running() -> bool:
-    proc = run(["pgrep", "-f", "squeekboard"], check=False)
+    proc = run(["pgrep", "-x", "squeekboard"], check=False)
     return proc.returncode == 0
 
 
-def ensure_osk_process() -> None:
-    if osk_running():
+def squeek_layout_src() -> Path:
+    return Path(__file__).resolve().parent.parent / "contrib" / "squeekboard" / "keyboards"
+
+
+def squeek_layout_dst() -> Path:
+    return HOME / ".local" / "share" / "squeekboard" / "keyboards"
+
+
+GTK_CSS_MARK_BEGIN = "/* mattd.x1fold squeekboard */"
+GTK_CSS_MARK_END = "/* mattd.x1fold squeekboard end */"
+GTK_CSS_PATH = HOME / ".config" / "gtk-3.0" / "gtk.css"
+SQUEEK_SCHEMA = "sm.puri.Squeekboard"
+
+
+def install_squeek_gtk_css() -> bool:
+    src = Path(__file__).resolve().parent.parent / "contrib" / "squeekboard" / "gtk-3.0-squeekboard.css"
+    if not src.is_file():
+        return False
+    body = src.read_text().strip()
+    block = f"{GTK_CSS_MARK_BEGIN}\n{body}\n{GTK_CSS_MARK_END}\n"
+    GTK_CSS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    text = GTK_CSS_PATH.read_text() if GTK_CSS_PATH.exists() else ""
+    if GTK_CSS_MARK_BEGIN in text and GTK_CSS_MARK_END in text:
+        updated = re.sub(
+            re.escape(GTK_CSS_MARK_BEGIN) + r".*?" + re.escape(GTK_CSS_MARK_END) + r"\n?",
+            block,
+            text,
+            count=1,
+            flags=re.S,
+        )
+        if updated == text:
+            return False
+        GTK_CSS_PATH.write_text(updated)
+        return True
+    if text and not text.endswith("\n"):
+        text += "\n"
+    GTK_CSS_PATH.write_text(text + "\n" + block)
+    return True
+
+
+def apply_squeek_scale() -> None:
+    """Squeekboard documents these as the workaround for compositor scaling."""
+    if not shutil.which("gsettings"):
         return
+    for key in (
+        "scale-in-vertical-screen-orientation",
+        "scale-in-horizontal-screen-orientation",
+    ):
+        subprocess.run(
+            ["gsettings", "set", SQUEEK_SCHEMA, key, "1.6"],
+            check=False,
+            capture_output=True,
+        )
+
+
+def install_squeek_layouts() -> bool:
+    """Install layouts that use evdev keycodes Hyprland will actually honour.
+
+    Stock us_wide BackSpace is input-method erase (fcitx5 owns that seat).
+    Symbol buttons must be Squeekboard Uxxxx names so they share letter
+    scancodes on keymap 1; invented names type alphabet instead.
+    """
+    src = squeek_layout_src()
+    if not src.is_dir():
+        return False
+    dst_root = squeek_layout_dst()
+    changed = False
+    for src_file in src.rglob("*.yaml"):
+        rel = src_file.relative_to(src)
+        dst = dst_root / rel
+        data = src_file.read_text()
+        if dst.exists() and dst.read_text() == data:
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(data)
+        changed = True
+    return changed
+
+
+def stop_osk_process() -> None:
+    run(["pkill", "-x", "squeekboard"], check=False)
+    for _ in range(20):
+        if not osk_running():
+            return
+        time.sleep(0.05)
+
+
+def ensure_osk_process() -> None:
+    layouts_changed = install_squeek_layouts()
+    css_changed = install_squeek_gtk_css()
+    apply_squeek_scale()
+    if osk_running() and not layouts_changed and not css_changed:
+        return
+    if (layouts_changed or css_changed) and osk_running():
+        stop_osk_process()
     if not shutil.which("squeekboard"):
         fail("squeekboard is not installed")
     env = os.environ.copy()
     env["SQUEEKBOARD_FORCE"] = "1"
+    # Omarchy exports GDK_SCALE=2 for XWayland. This OLED is compositor
+    # scale 1.6. Integer 1 or 2 both mis-map the lower rows through to the
+    # wallpaper; unsetting lets GTK 3.24 use wp_fractional_scale_v1.
+    env.pop("GDK_SCALE", None)
+    env.pop("GDK_DPI_SCALE", None)
     subprocess.Popen(
         ["squeekboard"],
         env=env,
@@ -1561,8 +1677,6 @@ def main(argv: list[str]) -> int:
         if len(args) < 2:
             fail("overlap needs a pixel count")
         return run_locked(cmd_overlap, args[1])
-    if cmd in {"mini-laptop", "laptop"}:
-        return run_locked(cmd_clamshell, "on")
     if cmd == "tablet":
         return run_locked(cmd_tablet)
     if cmd == "apply":

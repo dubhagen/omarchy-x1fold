@@ -12,7 +12,7 @@ Built with help from Grok. Your mileage may vary: this is one ThinkPad X1 Fold 1
 
 ## What it does
 
-**Clamshell** is the mini-laptop posture. Fold the panel, set the Bluetooth keyboard on the lower half, and work on the top half only. The plugin:
+**Clamshell** is the folded posture. Fold the panel, set the Bluetooth keyboard on the lower half, and work on the top half only. The plugin:
 
 - Reserves that lower region so tiled windows cannot sit under the keys
 - In clamshell only, enforces a Quickshell boundary: overlay PanelWindows (menu, clipboard, emoji picker, OSD, notifications, KeyboardPanel, polkit, …) are inset to the visible OLED half so scrims, clicks, and cards stay above the keyboard. This uses layer-shell margins, not exclusive zones, so tiled windows do not reflow. Full-panel mode leaves them untouched. Other plugins can read `omarchy-shell mattd.x1fold usableArea`.
@@ -27,11 +27,15 @@ There is no xrandr-style crop on this panel. The Wayland equivalent is `hl.monit
 
 Covering fullscreen always uses the whole output; `reserved_area` does not apply to it. Maximize keeps compositor gaps and borders, and Hyprland will not move or resize a maximized window. In clamshell the screensaver and other fullscreen clients therefore map as borderless floats on the visible half. The plugin parks the bar for that duration — the same visual as covering-fullscreen on the full panel, cropped to the OLED half.
 
-There is no separate “mini-laptop” mode. That name is an alias of `clamshell on`.
-
 **Full panel** (tablet) is the other posture: the whole OLED is the desktop. Rotate it to any of the four orientations. Use Squeekboard when the hardware keyboard is away.
 
-Each rotate maps the Wacom HID 52BA touchscreen and pen to the same Hyprland transform as the OLED (`input.touchdevice` / `input.tablet`, plus those two devices, bound to `eDP-1`). Stock Hyprland leaves those at 0, so after a landscape rotate a tap on the top-left of the bar would land on the opposite side of the screen. The folio keyboard touchpad is a pointer and is left alone.
+Each rotate maps the Wacom HID 52BA touchscreen and pen (`i2c-WACF2200:00`, Hyprland names `wacom-hid-52ba-finger` / `wacom-hid-52ba-pen`) to the same transform as the OLED. Hyprland does not follow the monitor for touch, so landscape would otherwise keep taps in native portrait space.
+
+- Output stays **Auto**. Binding the digitizer to `eDP-1` maps taps into the usable layout box (minus bar/OSK exclusive zones). The bar and notifications then get no touches, and OSK taps land on the window.
+- Transform is written only when the OLED is actually rotated (`input.touchdevice` / `input.tablet`, plus those two devices). Returning to portrait drops that block and runs `hyprctl reload`.
+- Do not write `transform = 0`. An explicit 0 is “set” and replaces the live libinput matrix; reload cannot restore the native mapping, and the bar stops receiving taps. Recreating the Wacom HID (unbind/rebind `i2c-WACF2200:00`, same idea as `omarchy restart trackpad`) does. `omarchy restart shell` is not enough.
+
+Portrait → landscape → portrait, including the bar, is the verified path. The folio keyboard touchpad is a pointer and is left alone.
 
 **Auto-rotate** reads the two `accel_3d` IIO sensors. It is paused while the screensaver is up, and for a few seconds after, so a noisy sample cannot flip the desktop on wake.
 
@@ -134,15 +138,19 @@ x1fold apply
 
 The panel slider steps by 5 px, with − / + on either side. The same value is `x1fold overlap N`.
 
-## On-screen keyboard
+## Folio keyboard
 
 The ThinkPad TrackPoint Keyboard presents as an external HID on Bluetooth (`17ef:613e`, `X1FKeyboard`) and USB-C (`17ef:6142`, Primax). Stock libinput will not suppress its touchpad or TrackPoint while typing. The plugin’s Hyprland device block turns disable-while-typing on those pointers (both bus names) and uses a slower key-repeat. Tap-to-click stays on. `./setup.sh --boot` also installs a libinput quirk (`/etc/libinput/local-overrides.quirks`) plus a udev hwdb/rule that marks the keyboard and touchpad internal so typing actually pairs with those pointers.
 
 USB-C DWT (internal keyboard/touchpad tagging, Primax USB device names) follows [harshach/x1fold](https://github.com/harshach/x1fold).
 
-Squeekboard is started with the session (`SQUEEKBOARD_FORCE=1` so it is allowed on a non-phone form factor). Super+Alt+R shows or hides it.
+## On-screen keyboard
 
-It is forced off while clamshell is on — that posture already has a hardware keyboard — and the panel toggle is greyed out in that mode.
+Squeekboard is the tablet OSK. Super+Alt+R shows or hides it. It is forced off while clamshell is on — that posture already has a hardware keyboard — and the panel toggle is greyed out in that mode.
+
+The plugin starts it with the session (`SQUEEKBOARD_FORCE=1` so it is allowed on a non-phone form factor). Omarchy’s `GDK_SCALE=2` is unset for it so GTK can use this OLED’s 1.6 fractional scale. Squeekboard’s own `scale-in-*-screen-orientation` is set to 1.6 (the documented scaling workaround) so the panel is taller and taps are less likely to fall through the lower rows onto the window. The layer namespace is `osk`. The virtual keyboard is `share_states = 0` and `keybinds = false` so Shift is not shared with the hardware keyboard and Backspace does not fire Super+Backspace.
+
+This OLED is wide enough that Squeekboard loads `us_wide`. Stock `us_wide` deletes with input-method `erase` (fcitx5 already owns that seat) and Squeekboard’s extra symbol names do not match evdev scancodes unless they are written as `Uxxxx`. The plugin installs `~/.local/share/squeekboard/keyboards/` from `contrib/squeekboard/` (BackSpace keysyms and those `Uxxxx` names) plus an opaque GTK 3 style so taps do not fall through transparent padding.
 
 ## Bluetooth keyboard at the LUKS prompt
 
@@ -180,6 +188,7 @@ x1fold-plugin/
 ├── bin/x1fold             Posture CLI (Python)
 ├── initcpio/              bluetoothkbd hook for LUKS
 ├── contrib/               Hyprland + menu snippets setup.sh installs
+│   └── squeekboard/       OSK layouts and GTK 3 style
 ├── setup.sh               Install / uninstall
 ├── screenshots/panel.png
 └── LICENSE                MIT

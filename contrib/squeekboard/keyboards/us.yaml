@@ -1,0 +1,120 @@
+# English (US) wide layout for Hyprland + fcitx5.
+#
+# Stock us_wide BackSpace uses input-method "erase". fcitx5 already owns
+# that seat, so erase is a no-op. Use the BackSpace keysym instead.
+#
+# Squeekboard builds one XKB keymap per "keymap_idx". Lowercase letters
+# and digits are idx 0 (real evdev codes). Shifted symbols must be named
+# Uxxxx so they reuse those same codes on idx 1. Invented names (amp, pi)
+# land on idx 2+ with overlapping letter scancodes; if Hyprland does not
+# swap maps, 123-view types alphabet. Only use names Squeekboard special-cases.
+---
+outlines:
+    default:       { width: 36.0,  height: 42 }
+    change-view:   { width: 54.0,  height: 42 }
+    change-view-2: { width: 63.0,  height: 42 }
+    large:         { width: 36.0,  height: 42 }
+    spaceline:     { width: 162.0, height: 42 }
+    special:       { width: 36.0,  height: 42 }
+    special-2:     { width: 54.0,  height: 42 }
+    special-3:     { width: 63.0,  height: 42 }
+
+views:
+    base:
+        - "q w e r t y u i o p"
+        - "a s d f g h j k l"
+        - "show_upper z x c v b n m BackSpace"
+        - "show_numbers preferences U0020 U002E Return"
+    upper:
+        - "Q W E R T Y U I O P"
+        - "A S D F G H J K L"
+        - "show_upper Z X C V B N M BackSpace"
+        - "show_numbers preferences U0020 U002E Return"
+    numbers:
+        - "1 2 3 4 5 6 7 8 9 0"
+        - "U0040 U0023 U0024 U0025 U0026 U002D U005F U002B U0028 U0029"
+        - "show_symbols U002C U0022 U0027 U003A U003B U0021 U003F BackSpace"
+        - "show_letters preferences U0020 U002E Return"
+    symbols:
+        - "U007E U00B4 U007C U005C U002F U002A U002D U0028 U0029 U003B"
+        - "U005B U005D U007B U007D U003D U002B U0024 U0025 U0027 U0022"
+        - "show_numbers_from_symbols U003C U003E U005E U0026 U0023 U007E BackSpace"
+        - "show_letters preferences U0020 U002E Return"
+
+buttons:
+    show_upper:
+        action:
+            locking:
+                lock_view: "upper"
+                unlock_view: "base"
+        outline: "change-view"
+        icon: "key-shift"
+    BackSpace:
+        outline: "special-2"
+        icon: "edit-clear-symbolic"
+        keysym: "BackSpace"
+    preferences:
+        action: "show_prefs"
+        outline: "special"
+        icon: "keyboard-mode-symbolic"
+    show_numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view-2"
+        label: "123"
+    show_numbers_from_symbols:
+        action:
+            set_view: "numbers"
+        outline: "change-view"
+        label: "123"
+    show_letters:
+        action:
+            set_view: "base"
+        outline: "change-view-2"
+        label: "ABC"
+    show_symbols:
+        action:
+            set_view: "symbols"
+        outline: "change-view"
+        label: "*/="
+    U002E:
+        outline: "large"
+        label: "."
+    U0020:
+        outline: "spaceline"
+        label: " "
+    Return:
+        outline: "special-3"
+        icon: "key-enter"
+        keysym: "Return"
+    U0040: { label: "@" }
+    U0023: { label: "#" }
+    U0024: { label: "$" }
+    U0025: { label: "%" }
+    U0026: { label: "&" }
+    U002D: { label: "-" }
+    U005F: { label: "_" }
+    U002B: { label: "+" }
+    U0028: { label: "(" }
+    U0029: { label: ")" }
+    U002C: { label: "," }
+    U0022: { label: "\"" }
+    U0027: { label: "'" }
+    U003A: { label: ":" }
+    U003B: { label: ";" }
+    U0021: { label: "!" }
+    U003F: { label: "?" }
+    U007E: { label: "~" }
+    U00B4: { label: "`" }
+    U007C: { label: "|" }
+    U005C: { label: "\\" }
+    U002F: { label: "/" }
+    U002A: { label: "*" }
+    U005B: { label: "[" }
+    U005D: { label: "]" }
+    U007B: { label: "{" }
+    U007D: { label: "}" }
+    U003D: { label: "=" }
+    U003C: { label: "<" }
+    U003E: { label: ">" }
+    U005E: { label: "^" }

@@ -1,0 +1,5 @@
+/* mattd.x1fold: make the OSK surface opaque so Hyprland does not
+   pass taps through transparent padding to the window behind. */
+eek-gtk-keyboard {
+  background-color: #111111;
+}
