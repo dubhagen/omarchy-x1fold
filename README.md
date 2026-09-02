@@ -27,7 +27,7 @@ There is no xrandr-style crop on this panel. The Wayland equivalent is `hl.monit
 
 Covering fullscreen always uses the whole output; `reserved_area` does not apply to it. Maximize keeps compositor gaps and borders, and Hyprland will not move or resize a maximized window. In clamshell the screensaver and other fullscreen clients therefore map as borderless floats on the visible half. The plugin parks the bar for that duration — the same visual as covering-fullscreen on the full panel, cropped to the OLED half.
 
-**Full panel** (tablet) is the other posture: the whole OLED is the desktop. Rotate it to any of the four orientations. Use Squeekboard when the hardware keyboard is away.
+**Full panel** (tablet) is the other posture: the whole OLED is the desktop. Rotate it to any of the four orientations. Use the on-screen keyboard when the hardware keyboard is away.
 
 Each rotate maps the Wacom HID 52BA touchscreen and pen (`i2c-WACF2200:00`, Hyprland names `wacom-hid-52ba-finger` / `wacom-hid-52ba-pen`) to the same transform as the OLED. Hyprland does not follow the monitor for touch, so landscape would otherwise keep taps in native portrait space.
 
@@ -48,7 +48,7 @@ Omarchy’s idle-wake path re-enables the internal panel *without* a transform, 
 - Omarchy 4 with Hyprland (Lua config: `hyprctl eval "hl.monitor({...})"`)
 - ThinkPad X1 Fold 16 Gen 1 (Sharp 2024×2560 OLED, `eDP-1`)
 - Optional: ThinkPad Bluetooth TrackPoint Keyboard
-- Optional: [Squeekboard](https://gitlab.gnome.org/World/Phosh/squeekboard) for the on-screen keyboard
+- `wayland`, `pango`, `cairo`, and `libxkbcommon` to build the on-screen keyboard (usual Arch desktop already has these)
 
 Other folding PCs are untested. The accelerometer map and native portrait panel are specific to this chassis.
 
@@ -67,11 +67,11 @@ cd ~/projects/omarchy/x1fold-plugin
 1. Symlink this checkout to `~/.config/omarchy/plugins/mattd.x1fold`
 2. Put `x1fold` on your `PATH` (`~/.local/bin/x1fold`)
 3. Enable the bar widget (right section)
-4. Install keybindings, Squeekboard autostart, layer rules, TrackPoint-keyboard input, and Omarchy menu entries
+4. Build `wvkbd-deskintl` into `~/.local/bin` and install keybindings, layer rules, TrackPoint-keyboard input, and Omarchy menu entries
 5. Clone `omarchy.power` to `mattd.power` (still a separate bar widget) and overlay dual-battery pack totals
 6. Restart the Omarchy shell
 
-To also install Squeekboard, the Bluetooth-keyboard-at-LUKS initramfs hook, and the libinput quirk so disable-while-typing applies to the folio keyboard on Bluetooth and USB-C (needs `sudo` in a terminal):
+To also install the Bluetooth-keyboard-at-LUKS initramfs hook and the libinput quirk so disable-while-typing applies to the folio keyboard on Bluetooth and USB-C (needs `sudo` in a terminal):
 
 ```bash
 ./setup.sh --boot
@@ -146,11 +146,9 @@ USB-C DWT (internal keyboard/touchpad tagging, Primax USB device names) follows 
 
 ## On-screen keyboard
 
-Squeekboard is the tablet OSK. Super+Alt+R shows or hides it. It is forced off while clamshell is on — that posture already has a hardware keyboard — and the panel toggle is greyed out in that mode.
+The tablet OSK is [wvkbd](https://github.com/jjsullivan5196/wvkbd) built as `wvkbd-deskintl`: a PC-shaped board (Shift as a real modifier, number row, Ctrl, Super, Alt, Tab, Esc, F-keys). Super+Alt+R shows or hides it. It is forced off while clamshell is on — that posture already has a hardware keyboard — and the panel toggle is greyed out in that mode.
 
-The plugin starts it with the session (`SQUEEKBOARD_FORCE=1` so it is allowed on a non-phone form factor). Omarchy’s `GDK_SCALE=2` is unset for it so GTK can use this OLED’s 1.6 fractional scale. Squeekboard’s own `scale-in-*-screen-orientation` is set to 1.6 (the documented scaling workaround) so the panel is taller and taps are less likely to fall through the lower rows onto the window. The layer namespace is `osk`. The virtual keyboard is `share_states = 0` and `keybinds = false` so Shift is not shared with the hardware keyboard and Backspace does not fire Super+Backspace.
-
-This OLED is wide enough that Squeekboard loads `us_wide`. Stock `us_wide` deletes with input-method `erase` (fcitx5 already owns that seat) and Squeekboard’s extra symbol names do not match evdev scancodes unless they are written as `Uxxxx`. The plugin installs `~/.local/share/squeekboard/keyboards/` from `contrib/squeekboard/` (BackSpace keysyms and those `Uxxxx` names) plus an opaque GTK 3 style so taps do not fall through transparent padding.
+`setup.sh` builds it into `~/.local/bin/wvkbd-deskintl`. The plugin starts it on demand (no session autostart) and restores it after `x1fold apply` if it was left on. Portrait height is 520 logical pixels, landscape 400. The layer namespace is `wvkbd`. Hyprland gives it an exclusive zone so tiled windows sit above the keys. The virtual keyboard is `share_states = 0` and `keybinds = false` so Shift is not shared with the hardware keyboard and Backspace does not fire Super+Backspace. Hide tears the process down so unreleased OSK keys cannot leak into the folio keyboard.
 
 ## Bluetooth keyboard at the LUKS prompt
 
@@ -188,8 +186,7 @@ x1fold-plugin/
 ├── bin/x1fold             Posture CLI (Python)
 ├── initcpio/              bluetoothkbd hook for LUKS
 ├── contrib/               Hyprland + menu snippets setup.sh installs
-│   └── squeekboard/       OSK layouts and GTK 3 style
-├── setup.sh               Install / uninstall
+├── setup.sh               Install / uninstall (builds the on-screen keyboard)
 ├── screenshots/panel.png
 └── LICENSE                MIT
 ```
@@ -209,6 +206,7 @@ omarchy restart shell
 ## Credits
 
 - [harshach/x1fold](https://github.com/harshach/x1fold) — USB-C disable-while-typing (mark the keyboard and touchpad internal; match the Primax USB names)
+- [wvkbd](https://github.com/jjsullivan5196/wvkbd) — on-screen keyboard (`deskintl` layout)
 - Grok — help throughout this plugin
 
 ## License

@@ -298,9 +298,9 @@ Item {
 
   function skipOverlay(item) {
     var ns = root.layerNamespace(item)
-    if (ns === "mattd-x1fold-mask" || ns === "omarchy-bar")
+    if (ns === "mattd-x1fold-mask" || ns === "mattd-x1fold-ss-dismiss" || ns === "omarchy-bar")
       return true
-    if (ns === "osk" || ns === "squeekboard" || ns === "osksqueekboard")
+    if (ns === "wvkbd")
       return true
     if (ns.indexOf("omarchy-bar-") === 0)
       return true
@@ -1026,6 +1026,42 @@ Item {
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
       exclusionMode: ExclusionMode.Ignore
       aboveWindows: true
+    }
+  }
+
+  Variants {
+    model: Quickshell.screens
+
+    PanelWindow {
+      id: ssDismiss
+      required property var modelData
+
+      screen: modelData
+      visible: root.clamshell && root.ssDismissArmed && String(modelData.name || "").indexOf("eDP") === 0
+      anchors { left: true; right: true; top: true; bottom: true }
+      color: "#01000000"
+      WlrLayershell.namespace: "mattd-x1fold-ss-dismiss"
+      WlrLayershell.layer: WlrLayer.Overlay
+      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+      exclusionMode: ExclusionMode.Ignore
+      aboveWindows: true
+
+      MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.AllButtons
+        hoverEnabled: true
+        preventStealing: true
+        onPressed: function (mouse) {
+          mouse.accepted = true
+          root.dismissScreensaver()
+        }
+      }
+
+      TapHandler {
+        acceptedButtons: Qt.AllButtons
+        acceptedDevices: PointerDevice.TouchScreen | PointerDevice.Mouse | PointerDevice.Stylus
+        onTapped: root.dismissScreensaver()
+      }
     }
   }
 }

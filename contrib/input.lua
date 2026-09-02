@@ -44,11 +44,21 @@ x1fold_pointer("primax-electronics-ltd.-thinkpad-bluetooth-trackpoint-keyboard--
 x1fold_keyboard("primax-electronics-ltd.-thinkpad-bluetooth-trackpoint-keyboard---usb")
 
 -- OSK is a virtual keyboard with its own XKB maps. Do not share Caps/Shift
--- with the hardware keyboard (that looks like Caps Lock after one capital),
--- and do not let OSK Backspace fire Super+Backspace.
+-- with the hardware keyboard (Omarchy's shift:both_capslock_cancel then
+-- looks like Caps Lock after one capital), and do not let OSK Backspace
+-- fire Super+Backspace.
+hl.config({
+  input = {
+    virtualkeyboard = {
+      share_states = 0,
+      release_pressed_on_close = true,
+    },
+  },
+})
 hl.device({
-  name = "hl-virtual-keyboard-squeekboard",
+  name = "hl-virtual-keyboard-wvkbd-deskintl",
   keybinds = false,
   share_states = 0,
+  kb_options = "",
   release_pressed_on_close = true,
 })

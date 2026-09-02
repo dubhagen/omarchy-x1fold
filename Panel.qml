@@ -368,7 +368,7 @@ Panel {
           Toggle {
             id: oskToggle
             width: parent.width
-            label: "Squeekboard"
+            label: "On-screen keyboard"
             description: root.clamshell
               ? "Unavailable in clamshell. Turn clamshell off to use the on-screen keyboard."
               : "Shows only when clamshell is off. Super+Alt+R also toggles it."

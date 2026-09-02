@@ -15,6 +15,9 @@ MARK_END="-- mattd.x1fold: end"
 BOOT=0
 UNINSTALL=0
 RESTART_SHELL=1
+WVKBD_VERSION="0.20"
+WVKBD_BIN="${HOME}/.local/bin/wvkbd-deskintl"
+WVKBD_URL="https://github.com/jjsullivan5196/wvkbd/archive/refs/tags/v${WVKBD_VERSION}.tar.gz"
 
 usage() {
   cat <<EOF
@@ -22,8 +25,9 @@ Install the ThinkPad X1 Fold 16 plugin into Omarchy.
 
 Usage: ./setup.sh [options]
 
-  --boot              Also install Squeekboard and the Bluetooth-at-LUKS
-                      initramfs hook (needs sudo in a terminal)
+  --boot              Also install the Bluetooth-at-LUKS initramfs hook
+                      and folio-keyboard disable-while-typing (needs sudo
+                      in a terminal)
   --uninstall         Remove the plugin symlink, keybindings, menu entries,
                       and CLI link. Does not delete this checkout.
   --no-shell-restart  Skip \`omarchy restart shell\`
@@ -31,7 +35,7 @@ Usage: ./setup.sh [options]
 
 Default install:
   symlink this repo → ~/.config/omarchy/plugins/${PLUGIN_ID}
-  enable the bar widget, keybindings, OSK autostart, layer rules, menu
+  enable the bar widget, keybindings, on-screen keyboard, layer rules, menu
 EOF
 }
 
@@ -248,21 +252,67 @@ install_power_overlay() {
   log "dual-battery overlay installed on ${POWER_ID} (separate from ${PLUGIN_ID})"
 }
 
-install_squeek_layouts() {
-  local src="$REPO/contrib/squeekboard/keyboards"
-  local dst="${HOME}/.local/share/squeekboard/keyboards"
-  [[ -d $src ]] || return 0
-  mkdir -p "$dst/terminal"
-  local f
-  for f in "$src"/*.yaml "$src"/terminal/*.yaml; do
-    [[ -f $f ]] || continue
-    install -m 644 "$f" "$dst/${f#"$src"/}"
-  done
-  log "Squeekboard layouts → $dst (virtual-keyboard Backspace/numbers)"
-  if command -v gsettings >/dev/null; then
-    gsettings set sm.puri.Squeekboard scale-in-vertical-screen-orientation 1.6 || true
-    gsettings set sm.puri.Squeekboard scale-in-horizontal-screen-orientation 1.6 || true
+install_wvkbd() {
+  mkdir -p "${HOME}/.local/bin"
+  if [[ -x $WVKBD_BIN ]]; then
+    log "on-screen keyboard already at $WVKBD_BIN"
+    return 0
   fi
+  command -v make >/dev/null || die "make is required to build the on-screen keyboard"
+  command -v pkg-config >/dev/null || die "pkg-config is required to build the on-screen keyboard"
+  command -v wayland-scanner >/dev/null || die "wayland-scanner is required to build the on-screen keyboard"
+  local missing=() pkg
+  for pkg in wayland-client xkbcommon pangocairo; do
+    pkg-config --exists "$pkg" || missing+=("$pkg")
+  done
+  if (( ${#missing[@]} )); then
+    die "missing pkg-config packages for the on-screen keyboard: ${missing[*]}
+Install: pacman -S --needed base-devel wayland pango cairo libxkbcommon"
+  fi
+  local fetch=""
+  if command -v curl >/dev/null; then
+    fetch="curl"
+  elif command -v wget >/dev/null; then
+    fetch="wget"
+  else
+    die "curl or wget is required to fetch wvkbd"
+  fi
+  local work src
+  work="$(mktemp -d)"
+  src="$work/wvkbd-${WVKBD_VERSION}"
+  log "building wvkbd-deskintl ${WVKBD_VERSION}"
+  if [[ $fetch == curl ]]; then
+    curl -fsSL "$WVKBD_URL" | tar -xz -C "$work"
+  else
+    wget -qO- "$WVKBD_URL" | tar -xz -C "$work"
+  fi
+  [[ -d $src ]] || die "wvkbd source did not unpack at $src"
+  if ! make -C "$src" LAYOUT=deskintl wvkbd-deskintl; then
+    rm -rf "$work"
+    die "failed to build wvkbd-deskintl"
+  fi
+  install -m 755 "$src/wvkbd-deskintl" "$WVKBD_BIN"
+  rm -rf "$work"
+  log "on-screen keyboard → $WVKBD_BIN"
+}
+
+strip_gtk_css_block() {
+  local file="${HOME}/.config/gtk-3.0/gtk.css"
+  [[ -f $file ]] || return 0
+  python3 - "$file" <<'PY'
+import pathlib, re, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+updated = re.sub(
+    r"\n?/\* mattd\.x1fold squeekboard \*/.*?/\* mattd\.x1fold squeekboard end \*/\n?",
+    "\n",
+    text,
+    count=1,
+    flags=re.S,
+)
+if updated != text:
+    path.write_text(updated)
+PY
 }
 
 install_desktop() {
@@ -273,15 +323,13 @@ install_desktop() {
   patch_marked_lua "$HYPR/input.lua" "$REPO/contrib/input.lua"
   mkdir -p "${HOME}/.config/libinput"
   install -m 644 "$REPO/contrib/libinput-x1fold.quirks" "${HOME}/.config/libinput/local-overrides.quirks"
-  install_squeek_layouts
+  strip_gtk_css_block
   merge_menu "$MENU"
   log "Hyprland bindings, autostart, layer rules, keyboard input, and menu entries installed"
 }
 
 install_boot() {
   need_tty_sudo
-  log "installing Squeekboard"
-  sudo pacman -S --noconfirm --needed squeekboard
   log "installing bluetoothkbd initramfs hook"
   sudo mkdir -p /etc/initcpio/install /etc/initcpio/hooks /etc/mkinitcpio.conf.d
   sudo install -m 755 "$REPO/initcpio/install/bluetoothkbd" /etc/initcpio/install/bluetoothkbd
@@ -315,13 +363,19 @@ install_boot() {
 
 do_uninstall() {
   log "removing desktop integration"
+  pkill -x wvkbd-deskintl >/dev/null 2>&1 || true
   strip_marked_lua "$HYPR/bindings.lua"
   strip_marked_lua "$HYPR/autostart.lua"
   strip_marked_lua "$HYPR/hyprland.lua"
   strip_marked_lua "$HYPR/input.lua"
   strip_menu "$MENU"
+  strip_gtk_css_block
   if [[ -L $BIN_LINK ]]; then
     rm -f "$BIN_LINK"
+  fi
+  if [[ -f $WVKBD_BIN ]]; then
+    rm -f "$WVKBD_BIN"
+    log "removed $WVKBD_BIN"
   fi
   if command -v omarchy >/dev/null; then
     omarchy plugin disable "$PLUGIN_ID" >/dev/null 2>&1 || true
@@ -346,6 +400,7 @@ fi
 
 log "installing ${PLUGIN_ID} from $REPO"
 install_plugin_link
+install_wvkbd
 install_desktop
 enable_plugin
 install_power_overlay
@@ -361,5 +416,5 @@ fi
 
 log "done. Left-click the fold icon on the bar, or run: x1fold status"
 if (( ! BOOT )); then
-  printf '\n    On-screen keyboard + Bluetooth at LUKS:  ./setup.sh --boot\n\n'
+  printf '\n    Bluetooth keyboard at LUKS:  ./setup.sh --boot\n\n'
 fi
