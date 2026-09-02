@@ -44,6 +44,10 @@ BEGIN_MARK = "-- mattd.x1fold: begin"
 END_MARK = "-- mattd.x1fold: end"
 ARRANGE_BEGIN = "-- omarchy-monitor-arrange: begin"
 INTERNAL_RE = re.compile(r"^(eDP|LVDS|DSI)-")
+FALLBACK_DIGITIZERS = (
+    "wacom-hid-52ba-finger",
+    "wacom-hid-52ba-pen",
+)
 SCREENSAVER_CLASS = "org.omarchy.screensaver"
 BAR_OFF_FLAG = HOME / ".local" / "state" / "omarchy" / "toggles" / "bar-off"
 BAR_HIDDEN_MARKER = STATE_DIR / "bar-hidden-by-plugin"
@@ -237,6 +241,47 @@ def monitor_lua(mon: dict, transform: int, reserved_bottom: int) -> str:
     )
 
 
+def hypr_digitizer_names() -> list[str]:
+    """Touchscreens and tablet pens. Not the folio keyboard touchpad."""
+    names: list[str] = []
+    try:
+        data = json.loads(run(["hyprctl", "devices", "-j"], check=False).stdout or "{}")
+    except (json.JSONDecodeError, FileNotFoundError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    for key in ("touch", "tablets"):
+        for dev in data.get(key) or []:
+            if not isinstance(dev, dict):
+                continue
+            name = str(dev.get("name") or "").strip()
+            if name and name not in names:
+                names.append(name)
+    return names or list(FALLBACK_DIGITIZERS)
+
+
+def touch_lua(transform: int, output: str) -> str:
+    """Keep Wacom finger/pen mapped to the OLED rotation.
+
+    Hyprland's default input:touchdevice:transform is 0, not "follow the
+    monitor", so rotating the panel leaves taps in native portrait space.
+    """
+    t = int(transform) % 8
+    out = lua_escape(output or "eDP-1")
+    lines = [
+        "hl.config({ input = { "
+        f'touchdevice = {{ transform = {t}, output = "{out}" }}, '
+        f'tablet = {{ transform = {t}, output = "{out}" }} '
+        "} })"
+    ]
+    for name in hypr_digitizer_names():
+        n = lua_escape(name)
+        lines.append(
+            f'hl.device({{ name = "{n}", transform = {t}, output = "{out}" }})'
+        )
+    return "\n".join(lines)
+
+
 def eval_monitor(lua: str) -> None:
     try:
         proc = run(["hyprctl", "eval", lua], check=False)
@@ -329,8 +374,10 @@ def apply(state: dict, quiet: bool = False) -> dict:
         mon, transform, clamshell, float(state["cover_ratio"]), int(state["overlap_px"])
     )
     lua = monitor_lua(mon, transform, bottom)
+    touch = touch_lua(transform, str(mon.get("name") or "eDP-1"))
     eval_monitor(lua)
-    persist_lua(lua)
+    eval_lua(touch)
+    persist_lua(lua + "\n" + touch)
     sync_arrange_transform(mon, transform)
     eval_screensaver_rule(state, mon, bottom)
     save_state(state)

@@ -31,6 +31,8 @@ There is no separate “mini-laptop” mode. That name is an alias of `clamshell
 
 **Full panel** (tablet) is the other posture: the whole OLED is the desktop. Rotate it to any of the four orientations. Use Squeekboard when the hardware keyboard is away.
 
+Each rotate maps the Wacom HID 52BA touchscreen and pen to the same Hyprland transform as the OLED (`input.touchdevice` / `input.tablet`, plus those two devices, bound to `eDP-1`). Stock Hyprland leaves those at 0, so after a landscape rotate a tap on the top-left of the bar would land on the opposite side of the screen. The folio keyboard touchpad is a pointer and is left alone.
+
 **Auto-rotate** reads the two `accel_3d` IIO sensors. It is paused while the screensaver is up, and for a few seconds after, so a noisy sample cannot flip the desktop on wake.
 
 Omarchy’s idle-wake path re-enables the internal panel *without* a transform, and this OLED is natively portrait. The plugin watches screensaver dismiss, DPMS restore, and `monitoradded` / `configreloaded`, then puts the saved orientation back.
@@ -183,7 +185,7 @@ x1fold-plugin/
 └── LICENSE                MIT
 ```
 
-Runtime state (not in git) lives at `~/.local/state/omarchy/x1fold/state.json`. The live Hyprland transform is also persisted in a marked block at the end of `~/.config/hypr/monitors.lua` so it survives compositor reload.
+Runtime state (not in git) lives at `~/.local/state/omarchy/x1fold/state.json`. The live Hyprland transform, reserved area, and touch/pen mapping are also persisted in a marked block at the end of `~/.config/hypr/monitors.lua` so they survive compositor reload.
 
 ### Development
 
