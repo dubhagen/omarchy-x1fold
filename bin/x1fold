@@ -8,6 +8,7 @@ Commands:
   autorotate on|off|toggle
   autoclamshell on|off|toggle
   osk on|off|toggle
+  menu [toggle|summon|close] [route]
   cover-ratio <0.35-0.70>
   overlap <pixels>
   tablet               full panel (clamshell off)
@@ -1502,6 +1503,18 @@ def cmd_overlap(state: dict, token: str) -> int:
     return 0
 
 
+def cmd_menu(state: dict, verb: str = "toggle", route: str = "root") -> int:
+    _ = state
+    verb = (verb or "toggle").strip().lower()
+    route = (route or "root").strip() or "root"
+    if verb in {"close", "hide"}:
+        run(["omarchy-menu", "close"], check=False)
+        return 0
+    action = "toggle" if verb == "toggle" else "summon"
+    run(["omarchy-menu", action, route], check=False)
+    return 0
+
+
 def cmd_osk(state: dict, token: str) -> int:
     key = token.strip().lower()
     if key == "park":
@@ -1634,6 +1647,12 @@ def main(argv: list[str]) -> int:
         if len(args) < 2:
             fail("osk needs on|off|toggle")
         return run_locked(cmd_osk, args[1])
+    if cmd == "menu":
+        return run_locked(
+            cmd_menu,
+            args[1] if len(args) > 1 else "toggle",
+            args[2] if len(args) > 2 else "root",
+        )
     if cmd == "cover-ratio":
         if len(args) < 2:
             fail("cover-ratio needs a number")

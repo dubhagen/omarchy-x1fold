@@ -36,6 +36,8 @@ Usage: ./setup.sh [options]
 Default install:
   symlink this repo → ~/.config/omarchy/plugins/${PLUGIN_ID}
   enable the bar widget, keybindings, on-screen keyboard, layer rules, menu
+  clone Omarchy overlays so clamshell insets the launcher, background
+  switcher, OSD, clipboard, and emoji picker
 EOF
 }
 
@@ -252,6 +254,35 @@ install_power_overlay() {
   log "dual-battery overlay installed on ${POWER_ID} (separate from ${PLUGIN_ID})"
 }
 
+clone_id_for() {
+  local source_id="$1"
+  printf '%s.%s' "${USER:-$(id -un)}" "${source_id#omarchy.}"
+}
+
+install_overlay_clone() {
+  # Omarchy 4.0.3 sandboxes third-party overlay discovery. Clone the
+  # first-party overlay and inset its own PanelWindow from x1fold state.
+  local source_id="$1" entry="$2"
+  local clone_id clone_dir
+  clone_id="$(clone_id_for "$source_id")"
+  clone_dir="${HOME}/.config/omarchy/plugins/${clone_id}"
+  if [[ ! -d $clone_dir ]]; then
+    log "cloning ${source_id} → ${clone_id}"
+    omarchy plugin clone "$source_id"
+  fi
+  [[ -d $clone_dir ]] || die "failed to create ${clone_dir}"
+  python3 "$REPO/contrib/clamshell/patch.py" apply "$clone_dir" "$entry"
+  log "clamshell inset on ${clone_id} (${entry})"
+}
+
+install_overlay_clones() {
+  install_overlay_clone omarchy.menu Menu.qml
+  install_overlay_clone omarchy.image-picker ImagePicker.qml
+  install_overlay_clone omarchy.osd Osd.qml
+  install_overlay_clone omarchy.clipboard Clipboard.qml
+  install_overlay_clone omarchy.emojis Emojis.qml
+}
+
 install_wvkbd() {
   mkdir -p "${HOME}/.local/bin"
   if [[ -x $WVKBD_BIN ]]; then
@@ -404,6 +435,7 @@ install_wvkbd
 install_desktop
 enable_plugin
 install_power_overlay
+install_overlay_clones
 
 if (( BOOT )); then
   install_boot

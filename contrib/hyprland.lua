@@ -1,5 +1,6 @@
 -- OLED keyboard-half mask: no fade, stay put.
 hl.layer_rule({ match = { namespace = "mattd-x1fold-mask" }, no_anim = true, animation = "none" })
+hl.layer_rule({ match = { namespace = "mattd-x1fold-wallpaper" }, no_anim = true, animation = "none" })
 hl.layer_rule({ match = { namespace = "mattd-x1fold-ss-dismiss" }, no_anim = true, animation = "none", order = 50 })
 hl.layer_rule({ match = { namespace = "^wvkbd$" }, no_anim = true })
 

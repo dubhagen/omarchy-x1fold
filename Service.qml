@@ -29,6 +29,10 @@ Item {
   property bool ssDismissArmed: false
   property bool ssDismissing: false
   property bool ssSawIdle: false
+  // Wired from BarWidget: Omarchy 4.0.3 no longer injects the host ShellRoot
+  // into third-party services, so overlay discovery uses this instead.
+  property var hostShell: null
+  property var barPanel: null
   readonly property int reservedLogical: {
     if (!clamshell)
       return 0
@@ -217,7 +221,21 @@ Item {
     return n > 0
   }
 
+  function hostRoot() {
+    return root.hostShell
+  }
+
+  onHostShellChanged: root.requestOverlayConstrain()
+  onBarPanelChanged: root.requestOverlayConstrain()
+
   function setBarHidden(hidden) {
+    try {
+      var host = root.hostRoot()
+      if (host && host.bar && host.bar.barHidden !== undefined) {
+        host.bar.barHidden = hidden
+        return
+      }
+    } catch (e) {}
     if (root.shell && root.shell.bar && root.shell.bar.barHidden !== undefined)
       root.shell.bar.barHidden = hidden
   }
@@ -298,7 +316,7 @@ Item {
 
   function skipOverlay(item) {
     var ns = root.layerNamespace(item)
-    if (ns === "mattd-x1fold-mask" || ns === "mattd-x1fold-ss-dismiss" || ns === "omarchy-bar")
+    if (ns === "mattd-x1fold-mask" || ns === "mattd-x1fold-ss-dismiss" || ns === "mattd-x1fold-wallpaper" || ns === "omarchy-bar")
       return true
     if (ns === "wvkbd")
       return true
@@ -308,9 +326,9 @@ Item {
       return true
     // Inset the fold wallpaper to the visible half so PreserveAspectCrop
     // fills the clamshell crop, not the full portrait OLED.
-    if (ns === "omarchy-background") {
-      var name = root.panelScreenName(item)
-      return name !== "" && name.indexOf("eDP") !== 0
+    if (ns === "omarchy-background" || root.isFoldBackground(item)) {
+      var bgName = root.panelScreenName(item)
+      return bgName !== "" && bgName.indexOf("eDP") !== 0
     }
     if (root.layerIsBackground(item))
       return true
@@ -569,10 +587,42 @@ Item {
   }
 
   function eachPluginRoot(fn) {
+    var host = root.hostRoot()
+    var id
+    if (host) {
+      try {
+        var hostLoaders = host.panelLoaders || {}
+        for (id in hostLoaders) {
+          try {
+            if (hostLoaders[id] && hostLoaders[id].item)
+              fn(hostLoaders[id].item)
+          } catch (e0) {}
+        }
+      } catch (eHostLoaders) {}
+      try {
+        var hostSvcs = host._services || {}
+        for (id in hostSvcs)
+          fn(hostSvcs[id])
+      } catch (eHostSvcs) {}
+      try { if (host.bar) fn(host.bar) } catch (eHostBar) {}
+      try {
+        var hostSlots = host.bar && host.bar.moduleSlots
+        if (hostSlots) {
+          for (var hi = 0; hi < hostSlots.length; hi++) {
+            var hostSlot = hostSlots[hi]
+            if (hostSlot && hostSlot.activeItem)
+              fn(hostSlot.activeItem)
+          }
+        }
+      } catch (eHostSlots) {}
+      fn(host)
+    }
+    if (root.barPanel)
+      fn(root.barPanel)
+
     if (!root.shell)
       return
     var loaders = root.shell.panelLoaders || {}
-    var id
     try {
       for (id in loaders) {
         try {
@@ -662,6 +712,16 @@ Item {
   }
 
   function backgroundService() {
+    try {
+      var host = root.hostRoot()
+      if (host && typeof host.serviceFor === "function") {
+        var hostSvc = host.serviceFor("omarchy.background")
+        if (hostSvc)
+          return hostSvc
+      }
+      if (host && host._services && host._services["omarchy.background"])
+        return host._services["omarchy.background"]
+    } catch (eHost) {}
     try {
       if (root.shell && typeof root.shell.serviceFor === "function") {
         var svc = root.shell.serviceFor("omarchy.background")
@@ -945,6 +1005,20 @@ Item {
     root.requestOverlayConstrain()
   }
 
+  readonly property string wallpaperLink: root.home + "/.local/state/omarchy/current/background"
+  property int wallpaperRev: 0
+
+  FileView {
+    path: root.wallpaperLink
+    watchChanges: true
+    printErrors: false
+    onFileChanged: {
+      reload()
+      root.wallpaperRev++
+    }
+    onLoaded: root.wallpaperRev++
+  }
+
   IpcHandler {
     target: "mattd.x1fold"
 
@@ -1008,6 +1082,36 @@ Item {
         width: w,
         height: Math.max(0, h - inset)
       })
+    }
+  }
+
+  Variants {
+    model: Quickshell.screens
+
+    PanelWindow {
+      id: wallpaper
+      required property var modelData
+
+      screen: modelData
+      visible: root.clamshell && String(modelData.name || "").indexOf("eDP") === 0
+      anchors { top: true; left: true; right: true }
+      implicitHeight: Math.max(1, modelData.height - root.reservedLogical)
+      color: "transparent"
+      WlrLayershell.namespace: "mattd-x1fold-wallpaper"
+      // Bottom sits above the stock wallpaper and below windows/bar/menus.
+      // Empty mask keeps the layer click-through so the desktop still works.
+      WlrLayershell.layer: WlrLayer.Bottom
+      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+      exclusionMode: ExclusionMode.Ignore
+      mask: Region {}
+
+      Image {
+        anchors.fill: parent
+        source: "file://" + root.wallpaperLink + "?" + root.wallpaperRev
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+        cache: false
+      }
     }
   }
 

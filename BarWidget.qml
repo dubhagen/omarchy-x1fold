@@ -26,6 +26,22 @@ BarWidget {
     if ("hostWidget" in target) target.hostWidget = root
   }
 
+  function attachHostToService() {
+    var svc = null
+    try {
+      if (root.bar && root.bar.shell && typeof root.bar.shell.serviceFor === "function")
+        svc = root.bar.shell.serviceFor("mattd.x1fold")
+    } catch (e) {}
+    if (!svc)
+      return
+    try { svc.barPanel = QsWindow.window } catch (e2) {}
+    try {
+      if (root.bar && root.bar.shell && root.bar.shell._services)
+        svc.hostShell = root.bar.shell
+    } catch (e3) {}
+    try { svc.requestOverlayConstrain() } catch (e4) {}
+  }
+
   function refresh() {
     if (panelLoader.item && panelLoader.item.refresh) panelLoader.item.refresh()
   }
@@ -77,8 +93,13 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onBarChanged: injectPanel()
+  onBarChanged: {
+    injectPanel()
+    attachHostToService()
+  }
   onSettingsChanged: injectPanel()
+
+  Component.onCompleted: Qt.callLater(root.attachHostToService)
 
   FileView {
     path: root.statePath

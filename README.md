@@ -15,12 +15,12 @@ Built with help from Grok. Your mileage may vary: this is one ThinkPad X1 Fold 1
 **Clamshell** is the folded posture. Fold the panel, set the Bluetooth keyboard on the lower half, and work on the top half only. The plugin:
 
 - Reserves that lower region so tiled windows cannot sit under the keys
-- In clamshell only, enforces a Quickshell boundary: overlay PanelWindows (menu, clipboard, emoji picker, OSD, notifications, KeyboardPanel, polkit, …) are inset to the visible OLED half so scrims, clicks, and cards stay above the keyboard. This uses layer-shell margins, not exclusive zones, so tiled windows do not reflow. Full-panel mode leaves them untouched. Other plugins can read `omarchy-shell mattd.x1fold usableArea`.
+- In clamshell only, insets Omarchy Quickshell overlays to the visible OLED half so scrims, clicks, and cards stay above the keyboard. Omarchy 4.0.3 sandboxes the `shell` object injected into third-party plugins, so this cannot walk host overlay PanelWindows. `setup.sh` therefore clones `omarchy.menu`, `omarchy.image-picker`, `omarchy.osd`, `omarchy.clipboard`, and `omarchy.emojis` (as `mattd.*`) and top-anchors those surfaces from `state.json`. The theme wallpaper is cropped with a click-through Bottom layer (`mattd-x1fold-wallpaper`) sized to the visible half, because Hyprland keeps the stock Background layer full-output. Other plugins can read `omarchy-shell mattd.x1fold usableArea`. Full-panel mode leaves overlays untouched.
 - In clamshell only, maps the screensaver as a borderless float on the visible half (a named Hyprland rule, so it never flashes covering-fullscreen). TTE then measures the visible pty. Dismiss unparks the bar first so tiled windows reflow behind the saver instead of jumping after it closes. Outside clamshell it is Omarchy’s stock covering fullscreen.
 - In clamshell only, Super+F, YouTube, and other fullscreen clients use that same half-panel float (cinema mode to the app, no compositor gaps). The bar parks for the duration. Exit tiles the window back into its original split, restores the focus border, and brings the bar back. Outside clamshell, Super+F is stock covering fullscreen.
 - Paints the covered half true black (`#000000`) on an Overlay layer so those OLED pixels turn off
 - Swallows input on the covered half
-- Scales the Omarchy theme wallpaper to the visible half (`PreserveAspectCrop` on that rectangle, including overlap). Full panel leaves the stock full-output wallpaper.
+- Scales the Omarchy theme wallpaper to the visible half (`PreserveAspectCrop` on a click-through Bottom layer over the stock wallpaper, including overlap). Full panel leaves the stock full-output wallpaper.
 - Turns the on-screen keyboard off (you already have hardware keys)
 
 There is no xrandr-style crop on this panel. The Wayland equivalent is `hl.monitor({ mode = "…" })`, but the OLED only advertises `2024×2560@60`, and Intel’s scaler can only Full / Center / Full-aspect a smaller mode — it cannot pin a half-height framebuffer to the top. So clamshell is a compositor reserved region plus a true-black overlay, not a different video mode.
@@ -69,7 +69,8 @@ cd ~/projects/omarchy/x1fold-plugin
 3. Enable the bar widget (right section)
 4. Build `wvkbd-deskintl` into `~/.local/bin` and install keybindings, layer rules, TrackPoint-keyboard input, and Omarchy menu entries
 5. Clone `omarchy.power` to `mattd.power` (still a separate bar widget) and overlay dual-battery pack totals
-6. Restart the Omarchy shell
+6. Clone the Omarchy menu, image picker, OSD, clipboard, and emoji overlays and inset them in clamshell
+7. Restart the Omarchy shell
 
 To also install the Bluetooth-keyboard-at-LUKS initramfs hook and the libinput quirk so disable-while-typing applies to the folio keyboard on Bluetooth and USB-C (needs `sudo` in a terminal):
 
@@ -89,6 +90,8 @@ Uninstall desktop integration (does not delete this checkout):
 ```bash
 ./setup.sh --uninstall
 ```
+
+That leaves `mattd.power` and the overlay clones (`mattd.menu`, `mattd.image-picker`, `mattd.osd`, `mattd.clipboard`, `mattd.emojis`) installed, the same way a dual-battery overlay survives. Without a clamshell `state.json` they behave like stock.
 
 ## Usage
 
@@ -185,7 +188,7 @@ x1fold-plugin/
 ├── Panel.qml              Settings panel
 ├── bin/x1fold             Posture CLI (Python)
 ├── initcpio/              bluetoothkbd hook for LUKS
-├── contrib/               Hyprland + menu snippets setup.sh installs
+├── contrib/               Hyprland + menu snippets and overlay clones setup.sh installs
 ├── setup.sh               Install / uninstall (builds the on-screen keyboard)
 ├── screenshots/panel.png
 └── LICENSE                MIT
