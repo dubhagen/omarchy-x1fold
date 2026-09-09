@@ -57,8 +57,8 @@ Other folding PCs are untested. The accelerometer map and native portrait panel 
 From this repo:
 
 ```bash
-git clone <this-repo> ~/projects/omarchy/x1fold-plugin
-cd ~/projects/omarchy/x1fold-plugin
+git clone <this-repo> ~/Projects/omarchy/x1fold-plugin
+cd ~/Projects/omarchy/x1fold-plugin
 ./setup.sh
 ```
 
