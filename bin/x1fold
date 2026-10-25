@@ -463,41 +463,98 @@ def is_screensaver(client: dict) -> bool:
     return str(client.get("class") or "") == SCREENSAVER_CLASS
 
 
-def client_is_fullscreen(client: dict) -> bool:
-    """Cinema fullscreen: real covering, client fullscreen, or the clamshell float."""
-    if is_screensaver(client):
+def _proc_ppid(pid: int) -> int:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return 0
+    cut = stat.rfind(")")
+    if cut < 0:
+        return 0
+    parts = stat[cut + 2 :].split()
+    if len(parts) < 2:
+        return 0
+    try:
+        return int(parts[1])
+    except ValueError:
+        return 0
+
+
+def _proc_comm(pid: int) -> str:
+    try:
+        return Path(f"/proc/{pid}/comm").read_text().strip()
+    except OSError:
+        return ""
+
+
+def pid_ancestors(pid: int, depth: int = 3) -> set[int]:
+    """The pid plus a few parents. Stop before the user session manager.
+
+    Walking up to systemd would make every window look like it owns every
+    player. Three levels covers a browser content process under the window
+    pid, and a player launched from a terminal on that window.
+    """
+    found: set[int] = set()
+    cur = pid
+    for _ in range(depth):
+        if cur <= 1 or cur in found:
+            break
+        found.add(cur)
+        parent = _proc_ppid(cur)
+        if parent <= 1 or _proc_comm(parent) in {"systemd", "init"}:
+            break
+        cur = parent
+    return found
+
+
+def pid_matches_player(
+    pid: int,
+    playing_pids: set[int],
+    ancestors=pid_ancestors,
+) -> bool:
+    if pid <= 0 or not playing_pids:
         return False
-    if int(client.get("fullscreen") or 0) == 2:
+    if pid in playing_pids:
         return True
-    if int(client.get("fullscreenClient") or 0) == 2:
+    if ancestors(pid) & playing_pids:
         return True
-    return "x1fold-clamshell-fs" in client_tags(client)
+    for player in playing_pids:
+        if pid in ancestors(player):
+            return True
+    return False
 
 
-def focused_client(clients: list[dict]) -> dict | None:
+def media_inhibit_addresses(
+    clients: list[dict],
+    playing_pids: set[int],
+    active_ws: int | None,
+    ancestors=pid_ancestors,
+) -> set[str]:
+    """Windows on the visible workspace whose process is playing.
+
+    Fullscreen and keyboard focus do not matter: a tiled YouTube window
+    beside a terminal still holds the screensaver off. A paused player is
+    absent from playing_pids, so the normal idle timeout still blanks.
+    Other workspaces do not inherit the hold.
+    """
+    if active_ws is None or not playing_pids:
+        return set()
+    found: set[str] = set()
     for client in clients:
+        if is_screensaver(client):
+            continue
+        if workspace_id(client) != active_ws:
+            continue
+        addr = str(client.get("address") or "")
+        if not addr:
+            continue
         try:
-            focused = int(client.get("focusHistoryID"))
+            pid = int(client.get("pid") or 0)
         except (TypeError, ValueError):
             continue
-        if focused == 0:
-            return client
-    return None
-
-
-def should_inhibit_fullscreen_idle(client: dict | None, playing_pids: set[int]) -> bool:
-    """Hold idle off only while the focused fullscreen app itself is playing.
-
-    A paused or idle fullscreen window still blanks. Keyboard activity already
-    resets Omarchy's idle timer, so this only covers playback with no input.
-    """
-    if not client or not playing_pids or not client_is_fullscreen(client):
-        return False
-    try:
-        pid = int(client.get("pid") or 0)
-    except (TypeError, ValueError):
-        return False
-    return pid > 0 and pid in playing_pids
+        if pid_matches_player(pid, playing_pids, ancestors):
+            found.add(addr)
+    return found
 
 
 def mpris_playing_pids() -> set[int]:
@@ -543,25 +600,105 @@ def mpris_playing_pids() -> set[int]:
     return pids
 
 
-# set_prop takes the rule enum, not the window-rule strings. "focus" is ignored.
+# set_prop takes the rule enum, not the window-rule strings. "focus" / "always"
+# are ignored. ALWAYS holds even when the window is unfocused, which a tiled
+# player beside a terminal needs. It also holds on a workspace that is not
+# showing, so the daemon clears it when that workspace is no longer current.
 IDLE_INHIBIT_NONE = "0"
-IDLE_INHIBIT_FOCUS = "3"
+IDLE_INHIBIT_ALWAYS = "1"
 
 
-def sync_fullscreen_media_inhibit(held: str | None) -> str | None:
-    """Inhibit idle while the focused fullscreen window's own player is playing."""
-    client = focused_client(hypr_clients())
-    want = should_inhibit_fullscreen_idle(client, mpris_playing_pids())
-    addr = str((client or {}).get("address") or "") if want else ""
-    if want and addr:
-        if held and held != addr:
-            set_window_prop(held, "idle_inhibit", IDLE_INHIBIT_NONE)
-        if held != addr:
-            set_window_prop(addr, "idle_inhibit", IDLE_INHIBIT_FOCUS)
-        return addr
-    if held:
-        set_window_prop(held, "idle_inhibit", IDLE_INHIBIT_NONE)
-    return None
+def sync_media_inhibit(
+    held: set[str],
+    clients: list[dict],
+    playing_pids: set[int],
+    active_ws: int | None,
+) -> set[str]:
+    """Hold idle off for playing windows on the workspace that is showing.
+
+    A missing workspace id leaves the current holds alone. activeworkspace
+    occasionally fails for one poll, and clearing on that would let the
+    screensaver start over a video.
+    """
+    if active_ws is None:
+        return held
+    want = media_inhibit_addresses(clients, playing_pids, active_ws)
+    by_addr = {str(client.get("address") or ""): client for client in clients}
+    for addr in list(held):
+        if addr in want:
+            continue
+        set_window_prop(addr, "idle_inhibit", IDLE_INHIBIT_NONE)
+        held.discard(addr)
+    for addr in want:
+        client = by_addr.get(addr) or {}
+        # A fullscreen transition rechecks window rules and can drop a prop
+        # that was set a moment earlier. Re-apply when Hyprland is not
+        # actually inhibiting. Skip when it is, so playback is not set_prop'd
+        # on every poll.
+        if addr in held and bool(client.get("inhibitingIdle")):
+            continue
+        set_window_prop(addr, "idle_inhibit", IDLE_INHIBIT_ALWAYS)
+        held.add(addr)
+    return held
+
+
+def cinema_client_fullscreen_dropped(client: dict) -> bool:
+    """Cinema float whose client has left fullscreen.
+
+    Steady cinema is internal 0, client 2. YouTube's own fullscreen exit
+    unsets the client mode only. Hyprland emits window.fullscreen only when
+    the internal mode changes, so that exit is invisible to the Lua hook.
+    Super+F leaves client mode at 2, so a window fullscreen the user opened
+    stays up until they toggle it or the app itself leaves fullscreen.
+    """
+    if is_screensaver(client) or not client.get("floating"):
+        return False
+    if "x1fold-clamshell-fs" not in client_tags(client):
+        return False
+    if int(client.get("fullscreen") or 0) != 0:
+        return False
+    return int(client.get("fullscreenClient") or 0) == 0
+
+
+def cinema_covering_again(client: dict) -> bool:
+    """Tagged cinema window that has popped back to covering fullscreen."""
+    if is_screensaver(client):
+        return False
+    if "x1fold-clamshell-fs" not in client_tags(client):
+        return False
+    return int(client.get("fullscreen") or 0) == 2
+
+
+class CinemaExitWatch:
+    """Signal cinema exit after the client fullscreen drop sticks for two polls.
+
+    One poll can land in the gap before enter finishes publishing client
+    mode 2. Two misses that gap. The placing lock is the other guard.
+    """
+
+    def __init__(self) -> None:
+        self._streak: dict[str, int] = {}
+
+    def poll(self, clients: list[dict], *, placing: bool) -> list[dict]:
+        if placing:
+            return []
+        exit_now: list[dict] = []
+        live: set[str] = set()
+        for client in clients:
+            key = addr_key(str(client.get("address") or ""))
+            if not key or not cinema_client_fullscreen_dropped(client):
+                if key:
+                    self._streak.pop(key, None)
+                continue
+            live.add(key)
+            self._streak[key] = self._streak.get(key, 0) + 1
+            if self._streak[key] >= 2:
+                exit_now.append(client)
+                self._streak[key] = 0
+        for key in list(self._streak):
+            if key not in live:
+                self._streak.pop(key, None)
+        return exit_now
 
 
 CURSOR_RESTORE_PATH = STATE_DIR / "cursor-restore.json"
@@ -1714,9 +1851,13 @@ def cmd_daemon(_state: dict) -> int:
     last_apply = 0.0
     resume_until = 0.0
     saw_screensaver = False
-    idle_held: str | None = None
+    idle_held: set[str] = set()
+    playing_pids: set[int] = set()
     next_idle_check = 0.0
     last_bar_ws: int | None = None
+    last_inhibit_ws: int | None = None
+    cinema_exits = CinemaExitWatch()
+    remap_at: dict[str, float] = {}
     while True:
         now = time.monotonic()
         saver = screensaver_running()
@@ -1731,11 +1872,57 @@ def cmd_daemon(_state: dict) -> int:
                         sync_bar(state, chrome=False)
                 except SystemExit:
                     pass
-        if not saver and now >= next_idle_check:
-            idle_held = sync_fullscreen_media_inhibit(idle_held)
-            next_idle_check = time.monotonic() + 1.0
+            placing = FS_PLACING_LOCK.exists()
+            try:
+                clients = hypr_clients()
+            except SystemExit:
+                clients = []
+            if not placing:
+                # A second covering request (YouTube F while already in cinema)
+                # leaves internal mode at 2, which ignores the reserved half.
+                # Pull it back. The Lua hook ignores that re-request on purpose
+                # so it cannot look like an exit.
+                remapped = False
+                for client in clients:
+                    if not cinema_covering_again(client):
+                        continue
+                    key = addr_key(str(client.get("address") or ""))
+                    if now - remap_at.get(key, 0.0) < 1.5:
+                        continue
+                    remap_at[key] = now
+                    try:
+                        with locked_state() as state:
+                            enter_clamshell_fs(state, client)
+                        remapped = True
+                    except SystemExit:
+                        pass
+                if remapped:
+                    try:
+                        clients = hypr_clients()
+                    except SystemExit:
+                        clients = []
+                for client in cinema_exits.poll(clients, placing=False):
+                    try:
+                        with locked_state() as state:
+                            exit_clamshell_fs(client)
+                        remapped = True
+                    except SystemExit:
+                        pass
+                if remapped:
+                    try:
+                        clients = hypr_clients()
+                    except SystemExit:
+                        clients = []
+            if now >= next_idle_check or ws != last_inhibit_ws:
+                playing_pids = mpris_playing_pids()
+                next_idle_check = time.monotonic() + 1.0
+                last_inhibit_ws = ws
+            idle_held = sync_media_inhibit(idle_held, clients, playing_pids, ws)
         if saver:
             if not saw_screensaver:
+                for addr in list(idle_held):
+                    set_window_prop(addr, "idle_inhibit", IDLE_INHIBIT_NONE)
+                idle_held.clear()
                 try:
                     hide_osk_surface()
                 except SystemExit:
