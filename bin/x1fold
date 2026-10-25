@@ -654,25 +654,38 @@ def float_to_usable_half(
     if usable_geometry_ok(client, x, y, w, h):
         return True
     drop_fs = int(client.get("fullscreen") or 0) in {1, 2}
-    lua = (
-        "local win = \"" + sel + "\"\n"
-        'hl.dispatch(hl.dsp.window.set_prop({ prop = "sync_fullscreen", value = "0", window = win }))\n'
-        'hl.dispatch(hl.dsp.window.float({ action = "set", window = win }))\n'
-    )
-    if drop_fs or client_fullscreen:
-        lua += (
-            "hl.dispatch(hl.dsp.window.fullscreen_state("
-            '{ internal = 0, client = 2, action = "set", window = win }))\n'
-            'hl.dispatch(hl.dsp.window.float({ action = "set", window = win }))\n'
+    # Hyprland 0.56 treats an unknown float action as toggle. "set" flipped
+    # the window back to tiled before move/resize, so YouTube kept either the
+    # old half-tile (a centered ~50% box) or real covering fullscreen.
+    # "on" stays floating. Prop refresh is deferred until the eval returns,
+    # which restored the pre-fullscreen box over our move; flush it first,
+    # then place again if the box did not stick.
+    def place_lua(*, fs_state: bool) -> str:
+        body = (
+            "local win = \"" + sel + "\"\n"
+            'hl.dispatch(hl.dsp.window.set_prop({ prop = "sync_fullscreen", value = "0", window = win }))\n'
+            'hl.dispatch(hl.dsp.window.set_prop({ prop = "no_anim", value = "1", window = win }))\n'
+            'hl.dispatch(hl.dsp.window.float({ action = "on", window = win }))\n'
         )
-    lua += (
-        f"hl.dispatch(hl.dsp.window.move({{ x = {x}, y = {y}, relative = false, window = win }}))\n"
-        f"hl.dispatch(hl.dsp.window.resize({{ x = {w}, y = {h}, relative = false, window = win }}))\n"
-    )
-    eval_lua(lua)
+        if fs_state:
+            body += (
+                "hl.dispatch(hl.dsp.window.fullscreen_state("
+                '{ internal = 0, client = 2, action = "set", window = win }))\n'
+                'hl.dispatch(hl.dsp.window.float({ action = "on", window = win }))\n'
+            )
+        body += (
+            "if hl.exec_scheduled_prop_refresh_immediately then "
+            "hl.exec_scheduled_prop_refresh_immediately() end\n"
+            f"hl.dispatch(hl.dsp.window.move({{ x = {x}, y = {y}, relative = false, window = win }}))\n"
+            f"hl.dispatch(hl.dsp.window.resize({{ x = {w}, y = {h}, relative = false, window = win }}))\n"
+        )
+        return body
+
+    eval_lua(place_lua(fs_state=drop_fs or client_fullscreen))
     cur = _client_by_addr(addr) or client
-    if not cur.get("floating"):
-        dispatch_lua(f'hl.dsp.window.float({{ action = "set", window = "{sel}" }})')
+    if not usable_geometry_ok(cur, x, y, w, h):
+        time.sleep(0.05)
+        eval_lua(place_lua(fs_state=drop_fs or client_fullscreen or int((cur or {}).get("fullscreen") or 0) in {1, 2}))
         cur = _client_by_addr(addr) or cur
     return usable_geometry_ok(cur, x, y, w, h)
 
