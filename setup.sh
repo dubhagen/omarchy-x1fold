@@ -262,6 +262,8 @@ clone_id_for() {
 install_overlay_clone() {
   # Omarchy 4.0.3 sandboxes third-party overlay discovery. Clone the
   # first-party overlay and inset its own PanelWindow from x1fold state.
+  # Menu.qml also lists Apps from desktop entries when the shell's
+  # app-library proxy returns rows with no entry objects.
   local source_id="$1" entry="$2"
   local clone_id clone_dir
   clone_id="$(clone_id_for "$source_id")"
@@ -272,7 +274,11 @@ install_overlay_clone() {
   fi
   [[ -d $clone_dir ]] || die "failed to create ${clone_dir}"
   python3 "$REPO/contrib/clamshell/patch.py" apply "$clone_dir" "$entry"
-  log "clamshell inset on ${clone_id} (${entry})"
+  if [[ $entry == Menu.qml ]]; then
+    log "clamshell inset and apps fallback on ${clone_id} (${entry})"
+  else
+    log "clamshell inset on ${clone_id} (${entry})"
+  fi
 }
 
 install_overlay_clones() {

@@ -69,7 +69,7 @@ cd ~/Projects/omarchy/x1fold-plugin
 3. Enable the bar widget (right section)
 4. Build `wvkbd-deskintl` into `~/.local/bin` and install keybindings, layer rules, TrackPoint-keyboard input, and Omarchy menu entries
 5. Clone `omarchy.power` to `mattd.power` (still a separate bar widget) and overlay dual-battery pack totals
-6. Clone the Omarchy menu, image picker, OSD, clipboard, and emoji overlays and inset them in clamshell
+6. Clone the Omarchy menu, image picker, OSD, clipboard, and emoji overlays and inset them in clamshell. The menu clone fills Apps from desktop entries when the shell proxy returns no usable rows
 7. Restart the Omarchy shell
 
 To also install the Bluetooth-keyboard-at-LUKS initramfs hook and the libinput quirk so disable-while-typing applies to the folio keyboard on Bluetooth and USB-C (needs `sudo` in a terminal):
@@ -91,7 +91,7 @@ Uninstall desktop integration (does not delete this checkout):
 ./setup.sh --uninstall
 ```
 
-That leaves `mattd.power` and the overlay clones (`mattd.menu`, `mattd.image-picker`, `mattd.osd`, `mattd.clipboard`, `mattd.emojis`) installed, the same way a dual-battery overlay survives. Without a clamshell `state.json` they behave like stock.
+That leaves `mattd.power` and the overlay clones (`mattd.menu`, `mattd.image-picker`, `mattd.osd`, `mattd.clipboard`, `mattd.emojis`) installed, the same way a dual-battery overlay survives. Without a clamshell `state.json` the insets stay inactive. The menu clone still lists Apps from desktop entries, because the shell proxy drops those objects even on the full panel.
 
 ## Usage
 
