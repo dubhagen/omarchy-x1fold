@@ -925,6 +925,10 @@ Item {
       }
     } else if (name === "monitoradded" || name === "configreloaded") {
       restoreTimer.restart()
+    } else if (name === "workspace" || name === "workspacev2" || name === "focusedmon" || name === "focusedmonv2") {
+      // The bar is one layer for the monitor. Show it again on workspaces
+      // that are not the cinema fullscreen one.
+      root.requestBarSync()
     } else if (name === "fullscreen") {
       // socket2 data is "0"/"1". Some builds prefix an address. Named Lua
       // hooks do the in-process remap; this is the retry backup.

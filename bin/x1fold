@@ -463,6 +463,107 @@ def is_screensaver(client: dict) -> bool:
     return str(client.get("class") or "") == SCREENSAVER_CLASS
 
 
+def client_is_fullscreen(client: dict) -> bool:
+    """Cinema fullscreen: real covering, client fullscreen, or the clamshell float."""
+    if is_screensaver(client):
+        return False
+    if int(client.get("fullscreen") or 0) == 2:
+        return True
+    if int(client.get("fullscreenClient") or 0) == 2:
+        return True
+    return "x1fold-clamshell-fs" in client_tags(client)
+
+
+def focused_client(clients: list[dict]) -> dict | None:
+    for client in clients:
+        try:
+            focused = int(client.get("focusHistoryID"))
+        except (TypeError, ValueError):
+            continue
+        if focused == 0:
+            return client
+    return None
+
+
+def should_inhibit_fullscreen_idle(client: dict | None, playing_pids: set[int]) -> bool:
+    """Hold idle off only while the focused fullscreen app itself is playing.
+
+    A paused or idle fullscreen window still blanks. Keyboard activity already
+    resets Omarchy's idle timer, so this only covers playback with no input.
+    """
+    if not client or not playing_pids or not client_is_fullscreen(client):
+        return False
+    try:
+        pid = int(client.get("pid") or 0)
+    except (TypeError, ValueError):
+        return False
+    return pid > 0 and pid in playing_pids
+
+
+def mpris_playing_pids() -> set[int]:
+    """PIDs whose MPRIS player reports PlaybackStatus Playing.
+
+    Zen and Firefox ask the Inhibit portal first. On Omarchy that portal
+    answers and then fails, so they never fall back to the Wayland idle
+    inhibitor the shell already honors. Playback status is the signal that
+    still arrives.
+    """
+    try:
+        listed = run(["busctl", "--user", "list", "--no-legend"], check=False)
+    except FileNotFoundError:
+        return set()
+    pids: set[int] = set()
+    for line in (listed.stdout or "").splitlines():
+        fields = line.split()
+        if not fields or not fields[0].startswith("org.mpris.MediaPlayer2."):
+            continue
+        name = fields[0]
+        prop = run(
+            [
+                "busctl", "--user", "get-property", name,
+                "/org/mpris/MediaPlayer2",
+                "org.mpris.MediaPlayer2.Player",
+                "PlaybackStatus",
+            ],
+            check=False,
+        )
+        if (prop.stdout or "").strip() != 's "Playing"':
+            continue
+        status = run(["busctl", "--user", "status", name], check=False)
+        for row in (status.stdout or "").splitlines():
+            if not row.startswith("PID="):
+                continue
+            try:
+                pid = int(row.split("=", 1)[1])
+            except ValueError:
+                break
+            if pid > 0:
+                pids.add(pid)
+            break
+    return pids
+
+
+# set_prop takes the rule enum, not the window-rule strings. "focus" is ignored.
+IDLE_INHIBIT_NONE = "0"
+IDLE_INHIBIT_FOCUS = "3"
+
+
+def sync_fullscreen_media_inhibit(held: str | None) -> str | None:
+    """Inhibit idle while the focused fullscreen window's own player is playing."""
+    client = focused_client(hypr_clients())
+    want = should_inhibit_fullscreen_idle(client, mpris_playing_pids())
+    addr = str((client or {}).get("address") or "") if want else ""
+    if want and addr:
+        if held and held != addr:
+            set_window_prop(held, "idle_inhibit", IDLE_INHIBIT_NONE)
+        if held != addr:
+            set_window_prop(addr, "idle_inhibit", IDLE_INHIBIT_FOCUS)
+        return addr
+    if held:
+        set_window_prop(held, "idle_inhibit", IDLE_INHIBIT_NONE)
+    return None
+
+
 CURSOR_RESTORE_PATH = STATE_DIR / "cursor-restore.json"
 
 
@@ -759,49 +860,104 @@ def cleanup_stale_clamshell_fs(client: dict) -> None:
     restore_window_chrome(addr)
 
 
-def fullscreen_needs_bar_hidden(state: dict) -> bool:
-    """Park the bar only while a real clamshell fullscreen overlay is up.
+def active_workspace_id() -> int | None:
+    try:
+        out = run(["hyprctl", "activeworkspace", "-j"], check=False).stdout or "{}"
+        data = json.loads(out)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return None
+    try:
+        return int(data.get("id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def bar_hidden_for_fullscreen(
+    state: dict,
+    clients: list[dict],
+    active_ws: int | None,
+    *,
+    saver: bool,
+) -> bool:
+    """Park the bar only on the workspace that is actually fullscreen.
+
+    The Omarchy bar is one layer for the whole monitor. Hiding it for a
+    cinema window on another workspace drops the exclusive zone everywhere,
+    so every desktop stretches and loses the bar.
+    """
+    if not bool(state.get("clamshell")):
+        return False
+    if saver:
+        return True
+    if active_ws is None:
+        return False
+    for client in clients:
+        if is_screensaver(client) or not clamshell_fs_live(client):
+            continue
+        if workspace_id(client) == active_ws:
+            return True
+    return False
+
+
+def fullscreen_needs_bar_hidden(state: dict, clients: list[dict] | None = None) -> bool:
+    """Park the bar only while this workspace is showing clamshell fullscreen.
 
     A tiled window can keep fullscreenClient=2 after YouTube/Super+F exit;
     that must not keep the bar hidden.
     """
-    if not bool(state.get("clamshell")):
-        return False
-    return any(clamshell_fs_live(client) for client in hypr_clients())
+    listed = clients if clients is not None else hypr_clients()
+    saver = any(is_screensaver(client) for client in listed)
+    return bar_hidden_for_fullscreen(
+        state, listed, active_workspace_id(), saver=saver
+    )
 
 
-def sync_bar(state: dict) -> bool:
+def nudge_bar_hidden() -> None:
+    """Ask the shell to re-read bar-off. The directory watch can miss a flip."""
+    if shutil.which("omarchy-shell"):
+        run(["omarchy-shell", "-q", "omarchy.bar", "syncHidden"], check=False)
+
+
+def sync_bar(state: dict, *, chrome: bool = True) -> bool:
     """Park the Omarchy bar during clamshell fullscreen; restore if we hid it.
 
     Uses the same `bar-off` flag as `omarchy toggle bar`. If the user already
     hid the bar, leave it. Covering-fullscreen on the full panel hides the
     bar; maximize-inside-the-half does not, so we park it ourselves.
+    The bar is one monitor layer, so it parks only while the workspace on
+    screen is the fullscreen one.
     """
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = STATE_DIR / "bar-sync.lock"
     with lock_path.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        for client in hypr_clients():
-            cleanup_stale_clamshell_fs(client)
-            if (
-                not clamshell_fs_live(client)
-                and not client.get("floating")
-                and client.get("address")
-            ):
-                restore_window_chrome(str(client.get("address")))
-        want_hidden = fullscreen_needs_bar_hidden(state)
+        clients = hypr_clients()
+        if chrome:
+            for client in clients:
+                cleanup_stale_clamshell_fs(client)
+                if (
+                    not clamshell_fs_live(client)
+                    and not client.get("floating")
+                    and client.get("address")
+                ):
+                    restore_window_chrome(str(client.get("address")))
+        want_hidden = fullscreen_needs_bar_hidden(state, clients)
         ours = BAR_HIDDEN_MARKER.exists()
         flag = BAR_OFF_FLAG.exists()
         if want_hidden:
             if flag and not ours:
                 return True
+            already = flag and ours
             BAR_OFF_FLAG.parent.mkdir(parents=True, exist_ok=True)
             BAR_OFF_FLAG.touch()
             BAR_HIDDEN_MARKER.write_text("1\n")
+            if not already:
+                nudge_bar_hidden()
             return True
         if ours:
             BAR_HIDDEN_MARKER.unlink(missing_ok=True)
             BAR_OFF_FLAG.unlink(missing_ok=True)
+            nudge_bar_hidden()
         return False
 
 
@@ -1558,9 +1714,26 @@ def cmd_daemon(_state: dict) -> int:
     last_apply = 0.0
     resume_until = 0.0
     saw_screensaver = False
+    idle_held: str | None = None
+    next_idle_check = 0.0
+    last_bar_ws: int | None = None
     while True:
         now = time.monotonic()
         saver = screensaver_running()
+        if not saver:
+            # Backup for the shell workspace event: bring the bar back as soon
+            # as the fullscreen workspace is no longer the one on screen.
+            ws = active_workspace_id()
+            if ws != last_bar_ws:
+                last_bar_ws = ws
+                try:
+                    with locked_state() as state:
+                        sync_bar(state, chrome=False)
+                except SystemExit:
+                    pass
+        if not saver and now >= next_idle_check:
+            idle_held = sync_fullscreen_media_inhibit(idle_held)
+            next_idle_check = time.monotonic() + 1.0
         if saver:
             if not saw_screensaver:
                 try:
