@@ -37,6 +37,18 @@ Each rotate maps the Wacom HID 52BA touchscreen and pen (`i2c-WACF2200:00`, Hypr
 
 Portrait → landscape → portrait, including the bar, is the verified path. The folio keyboard touchpad is a pointer and is left alone.
 
+**Active Pen.** Hover already moves the cursor. **Pen as mouse** (on by default; the panel switch, or `x1fold pen toggle`) turns the tip into a left click and a barrel button into a right click at that cursor. The eraser end stays an eraser. **Pen only** leaves the pen on the tablet protocol, which is what a drawing app expects. The helper does not grab the digitizer, so hover and pen-aware apps keep working. In mouse mode a pen-aware app can see the tip twice, once as a pen and once as a click.
+
+Reading the pen needs a udev `uaccess` tag on `Wacom HID 52BA Pen`. The session user is not in the `input` group. `setup.sh --boot` installs the rule with the folio-keyboard hook. To install only that rule:
+
+```bash
+sudo install -m 644 contrib/udev-x1fold-pen.rules /etc/udev/rules.d/66-x1fold-pen.rules
+sudo udevadm control --reload
+sudo udevadm trigger --subsystem-match=input --action=change --sysname-match='event*'
+```
+
+The trigger has to select the event node. A match on the pen’s name hits the parent input device and leaves `/dev/input/event*` unchanged, so the helper still cannot read the pen. The rule itself only tags `Wacom HID 52BA Pen`. The daemon retries, so clicks follow the switch after that trigger without another shell restart. Hover still moves the cursor in both positions; Hyprland does that on its own.
+
 **Auto-rotate** reads the two `accel_3d` IIO sensors. It is paused while the screensaver is up, and for a few seconds after, so a noisy sample cannot flip the desktop on wake.
 
 Omarchy’s idle-wake path re-enables the internal panel *without* a transform, and this OLED is natively portrait. The plugin watches screensaver dismiss, DPMS restore, and `monitoradded` / `configreloaded`, then puts the saved orientation back.
@@ -72,7 +84,7 @@ cd ~/Projects/omarchy/x1fold-plugin
 6. Clone the Omarchy menu, image picker, OSD, clipboard, and emoji overlays and inset them in clamshell. The menu clone fills Apps from desktop entries when the shell proxy returns no usable rows
 7. Restart the Omarchy shell
 
-To also install the Bluetooth-keyboard-at-LUKS initramfs hook and the libinput quirk so disable-while-typing applies to the folio keyboard on Bluetooth and USB-C (needs `sudo` in a terminal):
+To also install the Bluetooth-keyboard-at-LUKS initramfs hook, the libinput quirk so disable-while-typing applies to the folio keyboard on Bluetooth and USB-C, and the Active Pen udev rule (needs `sudo` in a terminal):
 
 ```bash
 ./setup.sh --boot

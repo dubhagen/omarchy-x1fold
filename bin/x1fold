@@ -8,6 +8,7 @@ Commands:
   autorotate on|off|toggle
   autoclamshell on|off|toggle
   osk on|off|toggle
+  pen on|off|toggle
   menu [toggle|summon|close] [route]
   cover-ratio <0.35-0.70>
   overlap <pixels>
@@ -85,6 +86,7 @@ DEFAULT_STATE = {
     "cover_ratio": 0.50,
     "overlap_px": 0,
     "osk": False,
+    "pen_mouse": True,
     "monitor_desc": "",
 }
 
@@ -132,6 +134,7 @@ def load_state() -> dict:
     state["autorotate"] = bool(state.get("autorotate"))
     state["autoclamshell"] = bool(state.get("autoclamshell"))
     state["osk"] = bool(state.get("osk"))
+    state["pen_mouse"] = bool(state.get("pen_mouse", True))
     try:
         ratio = float(state.get("cover_ratio", 0.50))
     except (TypeError, ValueError):
@@ -796,6 +799,164 @@ class ProtocolIdleHold:
                 proc.wait(timeout=0.5)
             except subprocess.TimeoutExpired:
                 pass
+
+
+PEN_DEVICE_NAME = "Wacom HID 52BA Pen"
+_PEN_HELPER_SOURCE = Path(__file__).resolve().with_name("x1fold-pen-mouse.c")
+_PEN_HELPER_BIN = STATE_DIR / "x1fold-pen-mouse"
+_PEN_UDEV_RULE = Path(__file__).resolve().parent.parent / "contrib" / "udev-x1fold-pen.rules"
+
+
+def pen_event_path() -> Path | None:
+    """Event node for the Active Pen, from a world-readable proc file."""
+    try:
+        text = Path("/proc/bus/input/devices").read_text()
+    except OSError:
+        return None
+    name = ""
+    for line in text.splitlines():
+        if line.startswith("N: Name="):
+            name = line.split("=", 1)[1].strip().strip('"')
+        elif line.startswith("H: Handlers=") and name == PEN_DEVICE_NAME:
+            for part in line.split("=", 1)[1].split():
+                if part.startswith("event") and part[5:].isdigit():
+                    return Path("/dev/input") / part
+            return None
+        elif line == "":
+            name = ""
+    return None
+
+
+def pen_readable() -> bool:
+    path = pen_event_path()
+    return path is not None and os.access(path, os.R_OK)
+
+
+def pen_mouse_helper() -> Path | None:
+    source = _PEN_HELPER_SOURCE
+    binary = _PEN_HELPER_BIN
+    if not source.is_file():
+        return None
+    try:
+        fresh = binary.is_file() and binary.stat().st_mtime >= source.stat().st_mtime
+    except OSError:
+        fresh = False
+    if fresh:
+        return binary
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if not compiler:
+        return None
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    built = run(
+        [compiler, "-O2", "-o", str(binary), str(source), "-lwayland-client"],
+        check=False,
+    )
+    if built.returncode != 0 or not binary.is_file():
+        if built.stderr:
+            print(built.stderr, file=sys.stderr, end="")
+        return None
+    return binary
+
+
+class PenMouse:
+    """Inject tip and barrel clicks while pen_mouse is on.
+
+    The helper is left running during the screensaver. When the pen node is
+    not readable yet, this waits and tries again so a later udev rule takes
+    effect without another shell restart.
+    """
+
+    def __init__(self) -> None:
+        self.proc: subprocess.Popen[bytes] | None = None
+        self._retry_at = 0.0
+        self._warned = False
+
+    def sync(self, enabled: bool) -> None:
+        if enabled:
+            self.start()
+        else:
+            self.stop()
+
+    def start(self) -> None:
+        proc = self.proc
+        if proc is not None and proc.poll() is None:
+            return
+        now = time.monotonic()
+        if now < self._retry_at:
+            return
+        if proc is not None:
+            self.proc = None
+            self._retry_at = now + 5.0
+            return
+        path = pen_event_path()
+        if path is None or not os.access(path, os.R_OK):
+            self._warn_unreadable(path)
+            self._retry_at = now + 2.0
+            return
+        binary = pen_mouse_helper()
+        if binary is None:
+            if not self._warned:
+                self._warned = True
+                print("x1fold: pen mouse helper unavailable", file=sys.stderr)
+            self._retry_at = now + 5.0
+            return
+        self.proc = subprocess.Popen(
+            [str(binary), "hold"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        self._retry_at = 0.0
+
+    def stop(self) -> None:
+        proc = self.proc
+        self.proc = None
+        self._retry_at = 0.0
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def _warn_unreadable(self, path: Path | None) -> None:
+        if self._warned:
+            return
+        self._warned = True
+        if path is None:
+            print(f"x1fold: Active Pen not found ({PEN_DEVICE_NAME})", file=sys.stderr)
+            return
+        installed = Path("/etc/udev/rules.d/66-x1fold-pen.rules").is_file()
+        # --attr-match=name hits the parent input device. The rule matches
+        # KERNEL==event*, so the trigger has to name those nodes.
+        trigger = (
+            "sudo udevadm trigger --subsystem-match=input --action=change "
+            "--sysname-match='event*'"
+        )
+        if installed:
+            print(
+                "x1fold: pen mouse emulation cannot read "
+                f"{path}. The udev rule is installed, but this event node "
+                "has no uaccess tag. Apply it with:\n"
+                f"  {trigger}\n"
+                "Clicks then follow the switch without restarting the shell.",
+                file=sys.stderr,
+            )
+            return
+        print(
+            "x1fold: pen mouse emulation cannot read "
+            f"{path}. Install the udev rule; clicks start on the next check "
+            "without restarting the shell:\n"
+            f"  sudo install -m 644 {_PEN_UDEV_RULE} /etc/udev/rules.d/66-x1fold-pen.rules\n"
+            "  sudo udevadm control --reload\n"
+            f"  {trigger}",
+            file=sys.stderr,
+        )
 
 
 def sync_media_inhibit(
@@ -1823,6 +1984,8 @@ def status_payload(state: dict) -> dict:
         "cover_ratio": float(state["cover_ratio"]),
         "overlap_px": int(state["overlap_px"]),
         "osk": bool(state.get("osk")),
+        "pen_mouse": bool(state.get("pen_mouse", True)),
+        "pen_ready": pen_readable(),
         "icon": "󰌌" if state["clamshell"] else ("󰁞" if is_portrait(transform) else "󰹑"),
     }
     if mon:
@@ -2138,6 +2301,38 @@ def cmd_osk(state: dict, token: str) -> int:
     return 0
 
 
+def cmd_pen(state: dict, token: str) -> int:
+    state["pen_mouse"] = parse_bool(token, bool(state.get("pen_mouse", True)))
+    save_state(state)
+    if not state.get("clamshell"):
+        if state["pen_mouse"]:
+            osd("Pen as mouse", "󰓶")
+        else:
+            osd("Pen only", "󰓶")
+    return 0
+
+
+def persist_pen_mouse_default() -> None:
+    """Write the default once so the panel, which reads state.json, shows on."""
+    with locked_state() as state:
+        try:
+            data = json.loads(STATE_PATH.read_text()) if STATE_PATH.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict) and "pen_mouse" in data:
+            return
+        state["pen_mouse"] = bool(state.get("pen_mouse", True))
+        save_state(state)
+
+
+def pen_mouse_wanted() -> bool:
+    try:
+        with locked_state() as state:
+            return bool(state.get("pen_mouse", True))
+    except SystemExit:
+        return True
+
+
 def cmd_tablet(state: dict) -> int:
     state["clamshell"] = False
     apply(state)
@@ -2145,6 +2340,10 @@ def cmd_tablet(state: dict) -> int:
 
 
 def cmd_daemon(_state: dict) -> int:
+    try:
+        persist_pen_mouse_default()
+    except SystemExit:
+        pass
     try:
         eval_osk_layer_rules()
     except SystemExit:
@@ -2156,6 +2355,7 @@ def cmd_daemon(_state: dict) -> int:
     saw_screensaver = False
     idle_held: set[str] = set()
     idle_hold = ProtocolIdleHold()
+    pen_hold = PenMouse()
     playing_pids: set[int] = set()
     next_idle_check = 0.0
     last_bar_ws: int | None = None
@@ -2165,6 +2365,7 @@ def cmd_daemon(_state: dict) -> int:
     sync_off: set[str] = set()
     sync_fs_seen: set[str] = set()
     while True:
+        pen_hold.sync(pen_mouse_wanted())
         now = time.monotonic()
         saver = screensaver_running()
         if not saver:
@@ -2362,6 +2563,10 @@ def main(argv: list[str]) -> int:
         if len(args) < 2:
             fail("osk needs on|off|toggle")
         return run_locked(cmd_osk, args[1])
+    if cmd == "pen":
+        if len(args) < 2:
+            fail("pen needs on|off|toggle")
+        return run_locked(cmd_pen, args[1])
     if cmd == "menu":
         return run_locked(
             cmd_menu,

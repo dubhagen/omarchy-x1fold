@@ -25,6 +25,8 @@ Panel {
   property real coverRatio: 0.5
   property int overlapPx: 0
   property bool oskOn: false
+  property bool penMouse: true
+  property bool penReady: true
   property string statusLabel: "Landscape"
   property string statusIcon: "󰹑"
   property bool cmdBusy: false
@@ -40,6 +42,7 @@ Panel {
     var bits = [statusLabel]
     if (autorotate) bits.push("auto-rotate")
     if (oskOn) bits.push("on-screen keyboard")
+    if (penMouse) bits.push("pen as mouse")
     return bits.join(" · ")
   }
 
@@ -87,6 +90,9 @@ Panel {
       if (!sliding)
         root.overlapPx = root.numOr(data.overlap_px, 0)
       root.oskOn = data.osk === true
+      root.penMouse = data.pen_mouse !== false
+      if (data.pen_ready !== undefined)
+        root.penReady = data.pen_ready === true
       var portrait = (root.orientationIndex % 2) === 0
       if (data.label)
         root.statusLabel = data.label
@@ -136,6 +142,8 @@ Panel {
           if (!overlapSlider.dragging)
             root.overlapPx = root.numOr(data.overlap_px, 0)
           root.oskOn = data.osk === true
+          root.penMouse = data.pen_mouse !== false
+          root.penReady = data.pen_ready === true
           root.statusLabel = data.label || "X1 Fold"
           root.statusIcon = data.icon || "󰹑"
         } catch (e) {}
@@ -181,6 +189,7 @@ Panel {
         else if (t === "r" || t === "R") root.run(["rotate", "cycle"])
         else if (t === "a" || t === "A") root.run(["autorotate", "toggle"])
         else if (t === "k" || t === "K") root.run(["osk", "toggle"])
+        else if (t === "p" || t === "P") root.run(["pen", "toggle"])
         else if (t === "t" || t === "T") root.run(["tablet"])
       }
 
@@ -371,6 +380,31 @@ Panel {
             checked: root.oskOn
             foreground: root.fg
             onClicked: root.run(["osk", "toggle"])
+          }
+        }
+
+        PanelSeparator { foreground: root.fg }
+
+        PanelSectionHeader {
+          text: "ACTIVE PEN"
+          foreground: root.fg
+          fontFamily: root.fontFamily
+        }
+
+        Item {
+          width: parent.width
+          implicitHeight: penToggle.implicitHeight
+
+          Toggle {
+            id: penToggle
+            width: parent.width
+            label: "Pen as mouse"
+            description: root.penMouse && !root.penReady
+              ? "On, but clicks are not hooked up. The udev rule is installed; re-tag the event node: sudo udevadm trigger --subsystem-match=input --action=change --sysname-match='event*'"
+              : "Tip left-clicks and a barrel button right-clicks. Off stops those clicks. The cursor still follows the pen either way. Drawing apps can see the tip twice while this is on."
+            checked: root.penMouse
+            foreground: root.fg
+            onClicked: root.run(["pen", "toggle"])
           }
         }
 

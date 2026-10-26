@@ -1,0 +1,7 @@
+# Lenovo Active Pen on the X1 Fold digitizer (Wacom HID 52BA Pen).
+# The session user is not in group input. Tag only this named pen so
+# logind's uaccess builtin grants the seat owner read access.
+# This file sorts before 73-seat-late.rules, which runs that builtin.
+
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event*", \
+  ATTRS{name}=="Wacom HID 52BA Pen", TAG+="uaccess"

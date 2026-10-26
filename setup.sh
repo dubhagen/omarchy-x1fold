@@ -25,9 +25,9 @@ Install the ThinkPad X1 Fold 16 plugin into Omarchy.
 
 Usage: ./setup.sh [options]
 
-  --boot              Also install the Bluetooth-at-LUKS initramfs hook
-                      and folio-keyboard disable-while-typing (needs sudo
-                      in a terminal)
+  --boot              Also install the Bluetooth-at-LUKS initramfs hook,
+                      folio-keyboard disable-while-typing, and the Active
+                      Pen click rule (needs sudo in a terminal)
   --uninstall         Remove the plugin symlink, keybindings, menu entries,
                       and CLI link. Does not delete this checkout.
   --no-shell-restart  Skip \`omarchy restart shell\`
@@ -378,6 +378,7 @@ install_boot() {
   sudo install -m 644 "$REPO/contrib/libinput-x1fold.quirks" /etc/libinput/local-overrides.quirks
   sudo install -m 644 "$REPO/contrib/udev-x1fold-touchpad.hwdb" /etc/udev/hwdb.d/71-x1fold-touchpad.hwdb
   sudo install -m 644 "$REPO/contrib/udev-x1fold-keyboard.rules" /etc/udev/rules.d/66-x1fold-keyboard.rules
+  sudo install -m 644 "$REPO/contrib/udev-x1fold-pen.rules" /etc/udev/rules.d/66-x1fold-pen.rules
   sudo mkdir -p /usr/local/lib/x1fold /etc/systemd/system
   sudo install -m 755 "$REPO/contrib/rebind-cnvi-bt" /usr/local/lib/x1fold/rebind-cnvi-bt
   sudo install -m 644 "$REPO/contrib/x1fold-rebind-bluetooth.service" /etc/systemd/system/x1fold-rebind-bluetooth.service
@@ -454,5 +455,5 @@ fi
 
 log "done. Left-click the fold icon on the bar, or run: x1fold status"
 if (( ! BOOT )); then
-  printf '\n    Bluetooth keyboard at LUKS:  ./setup.sh --boot\n\n'
+  printf '\n    Bluetooth keyboard at LUKS, and Active Pen clicks:  ./setup.sh --boot\n\n'
 fi
