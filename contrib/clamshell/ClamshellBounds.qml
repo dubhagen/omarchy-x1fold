@@ -9,21 +9,30 @@ Item {
   id: root
 
   property bool clamshell: false
+  property bool osk: false
   property real coverRatio: 0.5
   property int overlapPx: 0
 
   readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/x1fold/state.json"
 
   function activeOn(screen) {
-    if (!root.clamshell || !screen)
+    if (!screen)
       return false
-    return String(screen.name || "").indexOf("eDP") === 0
+    if (String(screen.name || "").indexOf("eDP") !== 0)
+      return false
+    return root.clamshell || root.osk
   }
 
   function insetFor(screen) {
     if (!root.activeOn(screen))
       return 0
-    return Math.max(0, Math.round(screen.height * root.coverRatio) + root.overlapPx)
+    var cover = 0
+    if (root.clamshell)
+      cover = Math.max(0, Math.round(screen.height * root.coverRatio) + root.overlapPx)
+    var keys = 0
+    if (root.osk)
+      keys = screen.height >= screen.width ? 520 : 400
+    return cover + keys
   }
 
   function usableHeightFor(screen) {
@@ -41,6 +50,7 @@ Item {
       try {
         var data = JSON.parse(text() || "{}")
         root.clamshell = data.clamshell === true
+        root.osk = data.osk === true
         root.coverRatio = Number(data.cover_ratio || 0.5)
         root.overlapPx = (data.overlap_px === undefined || data.overlap_px === null) ? 0 : Number(data.overlap_px)
       } catch (e) {}

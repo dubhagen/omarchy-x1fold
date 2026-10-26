@@ -2,7 +2,11 @@
 hl.layer_rule({ match = { namespace = "mattd-x1fold-mask" }, no_anim = true, animation = "none" })
 hl.layer_rule({ match = { namespace = "mattd-x1fold-wallpaper" }, no_anim = true, animation = "none" })
 hl.layer_rule({ match = { namespace = "mattd-x1fold-ss-dismiss" }, no_anim = true, animation = "none", order = 50 })
-hl.layer_rule({ match = { namespace = "^wvkbd$" }, no_anim = true })
+-- The strip is a Top layer (above fullscreen, below Overlay). wvkbd is
+-- Overlay, so the keys stay above it. order 10 keeps the strip behind any
+-- other Top surface that uses the default order.
+hl.layer_rule({ match = { namespace = "^mattd-x1fold-osk-mask$" }, no_anim = true, animation = "none", order = 10 })
+hl.layer_rule({ match = { namespace = "^wvkbd$" }, no_anim = true, order = 0 })
 
 -- Default is Omarchy's covering-fullscreen + slide. Clamshell apply()
 -- evals this named rule to a half-panel float; leaving tablet as
@@ -41,9 +45,7 @@ local function x1fold_placing()
   return false
 end
 
-local function x1fold_clamshell(_mon)
-  -- Do not use reserved.bottom: the OSK exclusive zone is also a bottom
-  -- reserve, and treating it as clamshell floats the screensaver.
+local function x1fold_flag(name)
   local path = (os.getenv("HOME") or "") .. "/.local/state/omarchy/x1fold/state.json"
   local file = io.open(path, "r")
   if not file then
@@ -51,7 +53,19 @@ local function x1fold_clamshell(_mon)
   end
   local body = file:read("*a") or ""
   file:close()
-  return string.find(body, '"clamshell"%s*:%s*true') ~= nil
+  return string.find(body, '"' .. name .. '"%s*:%s*true') ~= nil
+end
+
+local function x1fold_clamshell(_mon)
+  -- Do not use reserved.bottom: the OSK exclusive zone is also a bottom
+  -- reserve, and treating it as clamshell floats the screensaver.
+  return x1fold_flag("clamshell")
+end
+
+local function x1fold_viewport(_mon)
+  -- Folio clamshell, or the on-screen keyboard: fullscreen stays above that
+  -- bottom band. The keyboard itself is not the screensaver.
+  return x1fold_flag("clamshell") or x1fold_flag("osk")
 end
 
 local function x1fold_has_tag(w, name)
@@ -120,14 +134,16 @@ end)
 -- Client-initiated covering (YouTube) is remapped onto the visible half.
 -- Super+F in clamshell never goes covering; it toggles the half-panel float.
 hl.on("window.fullscreen", function(w)
-  if w == nil or not x1fold_clamshell(w.monitor) then
-    return
-  end
-  if x1fold_placing() then
+  if w == nil or x1fold_placing() then
     return
   end
   if w.class == "org.omarchy.screensaver" then
-    hl.dispatch(hl.dsp.exec_cmd(x1fold .. " constrain-screensaver " .. tostring(w.address)))
+    if x1fold_clamshell(w.monitor) then
+      hl.dispatch(hl.dsp.exec_cmd(x1fold .. " constrain-screensaver " .. tostring(w.address)))
+    end
+    return
+  end
+  if not x1fold_viewport(w.monitor) then
     return
   end
   local client_fs = tonumber(w.fullscreen_client) or 0
@@ -151,7 +167,7 @@ end)
 hl.unbind("SUPER + F")
 o.bind("SUPER + F", "Full screen", function()
   local w = hl.get_active_window()
-  if w ~= nil and x1fold_clamshell(w.monitor) then
+  if w ~= nil and x1fold_viewport(w.monitor) then
     hl.dispatch(hl.dsp.exec_cmd(x1fold .. " fullscreen toggle " .. tostring(w.address)))
     return
   end

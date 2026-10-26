@@ -45,8 +45,9 @@ x1fold_keyboard("primax-electronics-ltd.-thinkpad-bluetooth-trackpoint-keyboard-
 
 -- OSK is a virtual keyboard with its own XKB maps. Do not share Caps/Shift
 -- with the hardware keyboard (Omarchy's shift:both_capslock_cancel then
--- looks like Caps Lock after one capital), and do not let OSK Backspace
--- fire Super+Backspace.
+-- looks like Caps Lock after one capital). Keybinds stay on so a latched
+-- Super reaches compositor shortcuts. Sup is a latch: tap it, then the
+-- other key. bindings.lua keeps Backspace chords off this device.
 hl.config({
   input = {
     virtualkeyboard = {
@@ -57,7 +58,7 @@ hl.config({
 })
 hl.device({
   name = "hl-virtual-keyboard-wvkbd-deskintl",
-  keybinds = false,
+  keybinds = true,
   share_states = 0,
   kb_options = "",
   release_pressed_on_close = true,

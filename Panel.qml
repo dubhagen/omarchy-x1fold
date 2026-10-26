@@ -362,22 +362,15 @@ Panel {
         Item {
           width: parent.width
           implicitHeight: oskToggle.implicitHeight
-          opacity: root.clamshell ? 0.45 : 1
-          enabled: !root.clamshell
 
           Toggle {
             id: oskToggle
             width: parent.width
             label: "On-screen keyboard"
-            description: root.clamshell
-              ? "Unavailable in clamshell. Turn clamshell off to use the on-screen keyboard."
-              : "Shows only when clamshell is off. Super+Alt+R also toggles it."
-            checked: root.oskOn && !root.clamshell
+            description: "Stays at the bottom of the screen. Windows and fullscreen use only the space above it. Super+Alt+R also toggles it."
+            checked: root.oskOn
             foreground: root.fg
-            onClicked: {
-              if (root.clamshell) return
-              root.run(["osk", "toggle"])
-            }
+            onClicked: root.run(["osk", "toggle"])
           }
         }
 

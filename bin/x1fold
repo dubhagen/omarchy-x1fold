@@ -367,11 +367,43 @@ def eval_screensaver_rule(state: dict, mon: dict, bottom: int) -> None:
         pass
 
 
+# wvkbd -H / -L. The exclusive zone is this tall, so the viewport inset must match.
+OSK_PORTRAIT_PX = 520
+OSK_LANDSCAPE_PX = 400
+
+
 def reserved_bottom(mon: dict, transform: int, clamshell: bool, ratio: float, overlap: int) -> int:
     if not clamshell or not is_portrait(transform):
         return 0
     _lw, lh = logical_size(mon, transform)
     return max(0, round(lh * ratio) + int(overlap))
+
+
+def osk_pixels(transform: int) -> int:
+    return OSK_PORTRAIT_PX if is_portrait(transform) else OSK_LANDSCAPE_PX
+
+
+def keyboard_inset(state: dict, *, saver: bool | None = None) -> int:
+    """Height of the on-screen keyboard band.
+
+    Zero while the keyboard is off or parked for the screensaver. The folio
+    cover is separate: this band sits above that cover, at the bottom of the
+    visible area.
+    """
+    if not state.get("osk"):
+        return 0
+    if saver is None:
+        saver = screensaver_running()
+    if saver:
+        return 0
+    return osk_pixels(int(state.get("transform") or 0))
+
+
+def viewport_limited(state: dict, *, saver: bool | None = None) -> bool:
+    """True when fullscreen must stay in the viewport above a bottom mask."""
+    if state.get("clamshell"):
+        return True
+    return keyboard_inset(state, saver=saver) > 0
 
 
 def apply(state: dict, quiet: bool = False) -> dict:
@@ -400,15 +432,14 @@ def apply(state: dict, quiet: bool = False) -> dict:
         run(["hyprctl", "reload"], check=False)
     sync_arrange_transform(mon, transform)
     eval_screensaver_rule(state, mon, bottom)
+    eval_osk_layer_rules()
     save_state(state)
-    if clamshell:
-        set_osk(False, persist=False)
-        state["osk"] = False
-        save_state(state)
-    elif screensaver_running():
+    if screensaver_running():
         hide_osk_surface()
     elif state.get("osk"):
         show_osk_surface()
+    elif osk_running():
+        set_osk_visible(False)
     constrain_fullscreen(state)
     sync_bar(state)
     if not quiet:
@@ -878,11 +909,11 @@ def enforce_sync_fullscreen(
     clients: list[dict],
     clamshell: bool,
 ) -> tuple[set[str], set[str]]:
-    """Hold sync_fullscreen off while clamshell is on.
+    """Hold sync_fullscreen off while the viewport is limited.
 
     Set when a window first appears, and once more when it enters
     fullscreen. Hyprland reads the prop at the start of the request, so
-    it has to be off before the next one. Restored when clamshell is off.
+    it has to be off before the next one. Restored when the limit is gone.
     An empty client list does not turn the prop back on.
     """
     lines: list[str] = []
@@ -1000,17 +1031,22 @@ def restore_cursor_after_screensaver() -> None:
     eval_cursor(invisible=False, no_hardware_cursors=hw)
 
 
-def usable_rect(mon: dict, state: dict) -> tuple[int, int, int, int]:
-    """Visible OLED half. -1/+2 covers a 1px scale-rounding gap on the left."""
+def usable_rect(mon: dict, state: dict, *, saver: bool | None = None) -> tuple[int, int, int, int]:
+    """Viewport above the folio cover and the on-screen keyboard.
+
+    -1/+2 covers a 1px scale-rounding gap on the left. The keyboard's own
+    exclusive zone sits on top of the cover reserve, so both come off the height.
+    """
     transform = int(state.get("transform") or 0) % 4
     lw, lh = logical_size(mon, transform)
-    bottom = reserved_bottom(
+    cover = reserved_bottom(
         mon,
         transform,
-        True,
+        bool(state.get("clamshell")),
         float(state.get("cover_ratio") or 0.50),
         int(state.get("overlap_px") or 0),
     )
+    bottom = cover + keyboard_inset(state, saver=saver)
     x = int(mon.get("x") or 0) - 1
     y = int(mon.get("y") or 0)
     return x, y, lw + 2, max(1, lh - bottom)
@@ -1270,10 +1306,10 @@ def bar_hidden_for_fullscreen(
     cinema window on another workspace drops the exclusive zone everywhere,
     so every desktop stretches and loses the bar.
     """
-    if not bool(state.get("clamshell")):
+    if not viewport_limited(state, saver=saver):
         return False
     if saver:
-        return True
+        return bool(state.get("clamshell"))
     if active_ws is None:
         return False
     for client in clients:
@@ -1612,15 +1648,16 @@ def exit_clamshell_fs(client: dict) -> None:
 
 
 def constrain_fullscreen(state: dict, address: str | None = None) -> None:
-    """In clamshell, keep client-fullscreen apps in the reserved usable half.
+    """Keep client-fullscreen apps in the viewport above the cover and the keys.
 
     Covering-fullscreen uses the whole OLED. Maximize keeps gaps/borders and
     Hyprland will not move/resize a maximized window. Super+F therefore floats
-    the window onto the visible half directly (no covering flash). YouTube
-    still requests covering; that is remapped the same way. Tiled windows get
-    +x1fold-was-tiled so exit can tile them back.
+    the window onto the viewport directly (no covering flash). YouTube still
+    requests covering; that is remapped the same way. Tiled windows get
+    +x1fold-was-tiled so exit can tile them back. The limit is the folio
+    cover, or the on-screen keyboard, or both.
     """
-    clamshell = bool(state.get("clamshell"))
+    limited = viewport_limited(state)
     want = str(address or "").lower().replace("address:", "")
     for client in hypr_clients():
         addr = str(client.get("address") or "")
@@ -1633,9 +1670,9 @@ def constrain_fullscreen(state: dict, address: str | None = None) -> None:
         internal = int(client.get("fullscreen") or 0)
         client_fs = int(client.get("fullscreenClient") or 0)
         tags = client_tags(client)
-        if clamshell and (internal == 2 or (internal == 1 and client_fs == 2)):
+        if limited and (internal == 2 or (internal == 1 and client_fs == 2)):
             enter_clamshell_fs(state, client)
-        elif (not clamshell) and (
+        elif (not limited) and (
             "x1fold-clamshell-fs" in tags
             or (internal == 1 and client_fs == 2)
             or (bool(client.get("floating")) and client_fs == 2)
@@ -1790,16 +1827,19 @@ def status_payload(state: dict) -> dict:
     }
     if mon:
         lw, lh = logical_size(mon, transform)
-        bottom = reserved_bottom(
+        cover = reserved_bottom(
             mon, transform, bool(state["clamshell"]), float(state["cover_ratio"]), int(state["overlap_px"])
         )
+        keys = keyboard_inset(state)
         payload.update(
             {
                 "monitor": mon.get("name"),
                 "description": mon.get("description"),
                 "logical_width": lw,
                 "logical_height": lh,
-                "reserved_bottom": bottom,
+                "reserved_bottom": cover,
+                "keyboard_inset": keys,
+                "viewport_bottom": cover + keys,
                 "hypr_transform": mon.get("transform"),
                 "hypr_reserved": mon.get("reserved"),
             }
@@ -1903,13 +1943,15 @@ def monitor_matches(state: dict, mon: dict) -> bool:
         return False
     reserved = mon.get("reserved") or [0, 0, 0, 0]
     got_bottom = int(reserved[3]) if len(reserved) > 3 else 0
-    want = reserved_bottom(
+    cover = reserved_bottom(
         mon,
         int(state["transform"]),
         bool(state["clamshell"]),
         float(state["cover_ratio"]),
         int(state["overlap_px"]),
     )
+    # Hyprland adds the keyboard exclusive zone on top of the folio reserve.
+    want = cover + keyboard_inset(state)
     return abs(got_bottom - want) <= 4
 
 
@@ -1956,6 +1998,19 @@ def show_osk_surface() -> None:
         run(["pkill", "-USR2", "-x", WVKBD_NAME], check=False)
         return
     set_osk_visible(True)
+
+
+def eval_osk_layer_rules() -> None:
+    """Keep the black strip behind the keys.
+
+    The strip is a Top layer and wvkbd is Overlay, so the keys are already
+    above it. order 10 only sorts the strip among other Top surfaces.
+    """
+    eval_lua(
+        'hl.layer_rule({ match = { namespace = "^mattd-x1fold-osk-mask$" }, '
+        'no_anim = true, animation = "none", order = 10 })\n'
+        'hl.layer_rule({ match = { namespace = "^wvkbd$" }, no_anim = true, order = 0 })'
+    )
 
 
 def ensure_osk_process() -> None:
@@ -2075,15 +2130,11 @@ def cmd_osk(state: dict, token: str) -> int:
         hide_osk_surface()
         return 0
     if key in {"unpark", "restore"}:
-        if state.get("osk") and not state.get("clamshell") and not screensaver_running():
+        if state.get("osk") and not screensaver_running():
             show_osk_surface()
         return 0
-    wanted = parse_bool(token, bool(state.get("osk")))
-    if wanted and state["clamshell"]:
-        fail("on-screen keyboard is hidden while clamshell is on")
-    set_osk(wanted)
-    state = load_state()
-    announce(state)
+    state["osk"] = parse_bool(token, bool(state.get("osk")))
+    apply(state)
     return 0
 
 
@@ -2094,6 +2145,10 @@ def cmd_tablet(state: dict) -> int:
 
 
 def cmd_daemon(_state: dict) -> int:
+    try:
+        eval_osk_layer_rules()
+    except SystemExit:
+        pass
     pending_transform: int | None = None
     pending_since = 0.0
     last_apply = 0.0
@@ -2128,14 +2183,14 @@ def cmd_daemon(_state: dict) -> int:
                 clients = hypr_clients()
             except SystemExit:
                 clients = []
-            clamshell = False
+            limited = False
             try:
                 with locked_state() as state:
-                    clamshell = bool(state.get("clamshell"))
+                    limited = viewport_limited(state)
             except SystemExit:
-                clamshell = False
+                limited = False
             sync_off, sync_fs_seen = enforce_sync_fullscreen(
-                sync_off, sync_fs_seen, clients, clamshell
+                sync_off, sync_fs_seen, clients, limited
             )
             if not placing:
                 # A second covering request (YouTube F while already in cinema)
@@ -2158,7 +2213,7 @@ def cmd_daemon(_state: dict) -> int:
                         pass
                 # Client-only fullscreen does not change the internal mode,
                 # so the Lua hook never sees it. Place that onto the half too.
-                if clamshell:
+                if limited:
                     rect = None
                     try:
                         with locked_state() as state:

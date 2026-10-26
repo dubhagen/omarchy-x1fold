@@ -16,6 +16,7 @@ Item {
   readonly property string screensaverClass: "org.omarchy.screensaver"
 
   property bool clamshell: false
+  property bool oskOn: false
   property real coverRatio: 0.5
   property int overlapPx: 0
   property int orientationIndex: 3
@@ -33,22 +34,42 @@ Item {
   // into third-party services, so overlay discovery uses this instead.
   property var hostShell: null
   property var barPanel: null
-  readonly property int reservedLogical: {
-    if (!clamshell)
-      return 0
+  function edpScreen() {
     var screens = Quickshell.screens
     for (var i = 0; i < screens.length; i++) {
-      var sc = screens[i]
-      if (String(sc.name || "").indexOf("eDP") === 0)
-        return Math.max(0, Math.round(sc.height * coverRatio) + overlapPx)
+      if (String(screens[i].name || "").indexOf("eDP") === 0)
+        return screens[i]
     }
-    return 0
+    return null
   }
+
+  // Folio cover only. The on-screen keyboard is a second band above it.
+  readonly property int coverLogical: {
+    if (!clamshell)
+      return 0
+    var sc = root.edpScreen()
+    if (!sc)
+      return 0
+    return Math.max(0, Math.round(sc.height * coverRatio) + overlapPx)
+  }
+
+  // Matches bin/x1fold OSK_PORTRAIT_PX / OSK_LANDSCAPE_PX.
+  readonly property int oskLogical: {
+    if (!oskOn || root.screensaverOpen())
+      return 0
+    var sc = root.edpScreen()
+    if (!sc)
+      return 0
+    return sc.height >= sc.width ? 520 : 400
+  }
+
+  readonly property int reservedLogical: coverLogical + oskLogical
 
   function refreshFromText(text) {
     try {
       var data = JSON.parse(text || "{}")
       clamshell = data.clamshell === true
+      oskOn = data.osk === true
       coverRatio = Number(data.cover_ratio || 0.5)
       overlapPx = (data.overlap_px === undefined || data.overlap_px === null) ? 0 : Number(data.overlap_px)
       orientationIndex = Number(data.transform || 0)
@@ -174,7 +195,7 @@ Item {
     repeat: true
     property int left: 0
     onTriggered: {
-      if (!root.clamshell || left <= 0) {
+      if ((!root.clamshell && !root.oskOn) || left <= 0) {
         stop()
         left = 0
         return
@@ -206,7 +227,7 @@ Item {
     id: overlayWatch
     interval: 750
     repeat: true
-    running: root.clamshell
+    running: root.reservedLogical > 0
     onTriggered: root.constrainOverlays()
   }
 
@@ -250,7 +271,7 @@ Item {
   }
 
   function hideBarForFullscreen() {
-    if (!root.clamshell)
+    if (!root.clamshell && !root.oskOn)
       return
     if (root.shell && root.shell.bar && root.shell.bar.barHidden && !root.barHiddenByUs)
       return
@@ -316,7 +337,7 @@ Item {
 
   function skipOverlay(item) {
     var ns = root.layerNamespace(item)
-    if (ns === "mattd-x1fold-mask" || ns === "mattd-x1fold-ss-dismiss" || ns === "mattd-x1fold-wallpaper" || ns === "omarchy-bar")
+    if (ns === "mattd-x1fold-mask" || ns === "mattd-x1fold-osk-mask" || ns === "mattd-x1fold-ss-dismiss" || ns === "mattd-x1fold-wallpaper" || ns === "omarchy-bar")
       return true
     if (ns === "wvkbd")
       return true
@@ -324,9 +345,12 @@ Item {
       return true
     if (ns.indexOf("lock") !== -1 || ns.indexOf("screensaver") !== -1)
       return true
-    // Inset the fold wallpaper to the visible half so PreserveAspectCrop
-    // fills the clamshell crop, not the full portrait OLED.
+    // Inset the fold wallpaper only while the folio is closed, so
+    // PreserveAspectCrop fills that crop. The on-screen keyboard keeps the
+    // stock wallpaper and covers its own strip with the black mask.
     if (ns === "omarchy-background" || root.isFoldBackground(item)) {
+      if (!root.clamshell)
+        return true
       var bgName = root.panelScreenName(item)
       return bgName !== "" && bgName.indexOf("eDP") !== 0
     }
@@ -942,7 +966,7 @@ Item {
       } else {
         entered = String(parts[0] || "") === "1"
       }
-      if (root.clamshell && entered) {
+      if ((root.clamshell || root.oskOn) && entered) {
         root.hideBarForFullscreen()
         var argv = [root.script, "constrain-fullscreen"]
         if (addr.indexOf("0x") === 0)
@@ -958,6 +982,7 @@ Item {
   }
 
   onClamshellChanged: root.requestOverlayConstrain()
+  onOskOnChanged: root.requestOverlayConstrain()
   onCoverRatioChanged: root.requestOverlayConstrain()
   onOverlapPxChanged: root.requestOverlayConstrain()
   onReservedLogicalChanged: root.requestOverlayConstrain()
@@ -1133,6 +1158,33 @@ Item {
       color: "#000000"
       WlrLayershell.namespace: "mattd-x1fold-mask"
       WlrLayershell.layer: WlrLayer.Overlay
+      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+      exclusionMode: ExclusionMode.Ignore
+      aboveWindows: true
+    }
+  }
+
+  Variants {
+    model: Quickshell.screens
+
+    PanelWindow {
+      id: oskMask
+      required property var modelData
+
+      // Black strip behind the keys. Bottom margin is the folio cover, so
+      // with the lid closed the strip sits at the bottom of the viewport
+      // and the keys stay above that cover. On the open panel the margin
+      // is 0 and the strip is the physical bottom.
+      screen: modelData
+      visible: root.oskLogical > 0 && String(modelData.name || "").indexOf("eDP") === 0
+      anchors { left: true; right: true; bottom: true }
+      margins.bottom: root.coverLogical
+      implicitHeight: root.oskLogical
+      color: "#000000"
+      WlrLayershell.namespace: "mattd-x1fold-osk-mask"
+      // Top is above fullscreen windows and below Overlay. wvkbd is Overlay,
+      // so the keys stay above this strip without a same-layer order fight.
+      WlrLayershell.layer: WlrLayer.Top
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
       exclusionMode: ExclusionMode.Ignore
       aboveWindows: true
