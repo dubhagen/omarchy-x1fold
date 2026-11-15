@@ -33,8 +33,8 @@ Usage: ./setup.sh [options]
                       A symlink at the plugin path is removed. A checkout
                       that is already that path is left in place, so
                       omarchy plugin remove can delete it afterwards.
-                      Does not delete the dubhagen.* overlay and power
-                      clones, or ~/.local/bin/x1fold-battery-status.
+                      Does not delete the dubhagen.* overlay, dock, and
+                      power clones, or ~/.local/bin/x1fold-battery-status.
   --no-shell-restart  Skip \`omarchy restart shell\`
   -h, --help          Show this help
 
@@ -42,9 +42,10 @@ Default install:
   use this repo as ~/.config/omarchy/plugins/${PLUGIN_ID}
   (symlink a separate checkout; leave an omarchy plugin add checkout in place)
   enable the bar widget, keybindings, on-screen keyboard, layer rules, menu
-  refresh dubhagen.* clones of the stock overlays and power widget, then
-  apply the clamshell inset and the dual-battery command. These ids are the
-  publisher's, so the install does not take a clone in your own user namespace.
+  refresh dubhagen.* clones of the stock overlays, the dock, and the power
+  widget, then apply the clamshell inset and the dual-battery command. These
+  ids are the publisher's, so the install does not take a clone in your own
+  user namespace.
 EOF
 }
 
@@ -432,6 +433,7 @@ install_publisher_clones() {
   install_owned_clone omarchy.osd overlay Osd.qml
   install_owned_clone omarchy.clipboard overlay Clipboard.qml
   install_owned_clone omarchy.emojis overlay Emojis.qml
+  install_owned_clone omarchy.dock overlay AppGrid.qml
   install_owned_clone omarchy.power power
 }
 
@@ -659,7 +661,7 @@ do_uninstall() {
   if (( RESTART_SHELL )) && command -v omarchy >/dev/null; then
     omarchy restart shell
   fi
-  log "left the dubhagen overlay and power clones, and ${PACK_STATUS_BIN}, in place"
+  log "left the dubhagen overlay, dock, and power clones, and ${PACK_STATUS_BIN}, in place"
   log "checkout left at $REPO"
 }
 

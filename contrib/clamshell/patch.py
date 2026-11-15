@@ -6,7 +6,8 @@ which stays blank until its height matches the screen, so the inset is a
 ClamshellOverlay with insetBottom. Older PanelWindow clones keep the fill
 anchors they already have. Menu.qml also gets an Apps-list fallback: the
 shell's plugin app-library proxy drops desktop-entry objects, so a stock
-merge leaves Apps empty.
+merge leaves Apps empty. The dock clone is not a first-party service, so
+Dock.qml also gets DockShell: shell.json pin inheritance and desktop entries.
 """
 
 from __future__ import annotations
@@ -217,6 +218,32 @@ WATCH_BLOCK = """  Connections {
 
 """
 JSONC_NEEDLE = "  // The JSONC sources are watched so live edits to the default file (or the\n"
+DOCK_MARK = "dubhagen.x1fold: dock-shell"
+DOCK_STOCK = """  readonly property var appLibrary: shell ? shell.appLibrary : null
+  readonly property var dockConfig: shell && shell.shellConfig && shell.shellConfig.dock ? shell.shellConfig.dock : ({})
+  readonly property var defaultDockConfig: shell && shell.defaultsConfig && shell.defaultsConfig.dock ? shell.defaultsConfig.dock : ({})
+"""
+DOCK_PATCH = """  // dubhagen.x1fold: dock-shell
+  // A cloned dock is not first-party, so its shell has no config and no app
+  // library. DockShell reads shell.json and the desktop entries instead.
+  DockShell { id: x1foldDockShell }
+  readonly property var appLibrary: {
+    var host = null
+    try { if (shell) host = shell.appLibrary } catch (e) { host = null }
+    return host || x1foldDockShell
+  }
+  readonly property var dockConfig: {
+    var host = null
+    try { if (shell && shell.shellConfig) host = shell.shellConfig.dock } catch (e) { host = null }
+    return host || x1foldDockShell.userDock
+  }
+  readonly property var defaultDockConfig: {
+    var host = null
+    try { if (shell && shell.defaultsConfig) host = shell.defaultsConfig.dock } catch (e) { host = null }
+    return host || x1foldDockShell.defaultDock
+  }
+  // dubhagen.x1fold: dock-shell end
+"""
 
 
 def fail(msg: str) -> None:
@@ -296,6 +323,36 @@ def unpatch_menu_apps(text: str) -> str:
     return text
 
 
+def patch_dock(clone_dir: Path, here: Path) -> None:
+    dock = clone_dir / "Dock.qml"
+    shell_src = here / "DockShell.qml"
+    search_src = here / "DockAppSearch.js"
+    if not dock.is_file():
+        fail(f"entry point missing: {dock}")
+    if not shell_src.is_file() or not search_src.is_file():
+        fail("missing DockShell.qml or DockAppSearch.js")
+    text = dock.read_text()
+    if DOCK_MARK not in text:
+        if DOCK_STOCK not in text:
+            fail("could not find the dock shell properties in Dock.qml")
+        text = text.replace(DOCK_STOCK, DOCK_PATCH, 1)
+        dock.write_text(text)
+    shutil.copy2(shell_src, clone_dir / "DockShell.qml")
+    shutil.copy2(search_src, clone_dir / "DockAppSearch.js")
+
+
+def unpatch_dock(clone_dir: Path) -> None:
+    dock = clone_dir / "Dock.qml"
+    if dock.is_file():
+        text = dock.read_text()
+        if DOCK_MARK in text:
+            if DOCK_PATCH not in text:
+                fail("dock shell patch is present but does not match; refusing to revert")
+            dock.write_text(text.replace(DOCK_PATCH, DOCK_STOCK, 1))
+    (clone_dir / "DockShell.qml").unlink(missing_ok=True)
+    (clone_dir / "DockAppSearch.js").unlink(missing_ok=True)
+
+
 def unpatch(text: str, entry_name: str = "") -> str:
     if OVERLAY_MARK_BEGIN in text and OVERLAY_MARK_END in text:
         start = text.index(OVERLAY_MARK_BEGIN)
@@ -343,6 +400,8 @@ def main(argv: list[str]) -> int:
         entry.write_text(text)
         bounds_dst.unlink(missing_ok=True)
         overlay_dst.unlink(missing_ok=True)
+        if entry_name == "AppGrid.qml":
+            unpatch_dock(clone_dir)
         return 0
 
     if not bounds_src.is_file():
@@ -356,6 +415,8 @@ def main(argv: list[str]) -> int:
     text = replace_anchors(text)
     if entry_name == "Menu.qml":
         text = patch_menu_apps(text)
+    if entry_name == "AppGrid.qml":
+        patch_dock(clone_dir, here)
     entry.write_text(text)
     return 0
 
