@@ -8,7 +8,7 @@ Built with help from Grok. Your mileage may vary: this is one ThinkPad X1 Fold 1
 
 ![X1 Fold settings panel](screenshots/panel.png)
 
-<p align="center"><sub>Settings panel (Tokyo Night). Left-click the bar widget to open it.</sub></p>
+<p align="center"><sub>Settings panel (Event Horizon). Left-click the bar widget to open it.</sub></p>
 
 ## What it does
 
@@ -211,6 +211,7 @@ x1fold-plugin/
 ├── initcpio/              bluetoothkbd hook for LUKS
 ├── contrib/               Hyprland + menu snippets, the clamshell patch, and the pack battery command
 ├── setup.sh               Install / uninstall (builds the on-screen keyboard)
+├── preview.png            Marketplace card
 ├── screenshots/panel.png
 └── LICENSE                MIT
 ```
