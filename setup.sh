@@ -29,15 +29,18 @@ Usage: ./setup.sh [options]
   --boot              Also install the Bluetooth-at-LUKS initramfs hook,
                       folio-keyboard disable-while-typing, and the Active
                       Pen click rule (needs sudo in a terminal)
-  --uninstall         Remove the plugin symlink, keybindings, menu entries,
-                      and CLI link. Does not delete this checkout, the
-                      dubhagen.* overlay and power clones, or
-                      ~/.local/bin/x1fold-battery-status.
+  --uninstall         Remove keybindings, menu entries, and the CLI link.
+                      A symlink at the plugin path is removed. A checkout
+                      that is already that path is left in place, so
+                      omarchy plugin remove can delete it afterwards.
+                      Does not delete the dubhagen.* overlay and power
+                      clones, or ~/.local/bin/x1fold-battery-status.
   --no-shell-restart  Skip \`omarchy restart shell\`
   -h, --help          Show this help
 
 Default install:
-  symlink this repo → ~/.config/omarchy/plugins/${PLUGIN_ID}
+  use this repo as ~/.config/omarchy/plugins/${PLUGIN_ID}
+  (symlink a separate checkout; leave an omarchy plugin add checkout in place)
   enable the bar widget, keybindings, on-screen keyboard, layer rules, menu
   refresh dubhagen.* clones of the stock overlays and power widget, then
   apply the clamshell inset and the dual-battery command. These ids are the
@@ -199,24 +202,27 @@ PY
 
 install_plugin_link() {
   mkdir -p "$(dirname "$LIVE")" "${HOME}/.local/bin"
-  local old
+  local old repo_real live_real=""
+  repo_real="$(readlink -f "$REPO")"
   for old in "${HOME}/.config/omarchy/plugins/"*; do
     [[ -L $old ]] || continue
     [[ $(basename "$old") == "$PLUGIN_ID" ]] && continue
-    if [[ $(readlink -f "$old") == $(readlink -f "$REPO") ]]; then
+    if [[ $(readlink -f "$old") == "$repo_real" ]]; then
       log "removing previous plugin link $old"
       rm -f "$old"
     fi
   done
-  if [[ -L $LIVE ]]; then
-    local current
-    current="$(readlink -f "$LIVE")"
-    if [[ $current == "$(readlink -f "$REPO")" ]]; then
-      log "plugin already linked at $LIVE"
-    else
-      log "replacing existing symlink $LIVE"
-      ln -sfn "$REPO" "$LIVE"
-    fi
+  if [[ -e $LIVE || -L $LIVE ]]; then
+    live_real="$(readlink -f "$LIVE")"
+  fi
+  # omarchy plugin add checks this repo out at LIVE. Running setup.sh from
+  # that directory must leave the checkout where it is. Moving it aside and
+  # symlinking LIVE at itself deletes the install out from under the script.
+  if [[ -n $live_real && $live_real == "$repo_real" ]]; then
+    log "plugin already installed at $LIVE"
+  elif [[ -L $LIVE ]]; then
+    log "replacing existing symlink $LIVE"
+    ln -sfn "$REPO" "$LIVE"
   elif [[ -d $LIVE ]]; then
     local backup
     backup="${HOME}/.local/share/x1fold-plugin/live-backup-$(date +%Y%m%d%H%M%S)"
@@ -646,6 +652,9 @@ do_uninstall() {
   if [[ -L $LIVE ]]; then
     rm -f "$LIVE"
     log "removed symlink $LIVE"
+  elif [[ -d $LIVE && $(readlink -f "$LIVE") == $(readlink -f "$REPO") ]]; then
+    log "left the plugin checkout at $LIVE"
+    log "remove it with: omarchy plugin remove ${PLUGIN_ID}"
   fi
   if (( RESTART_SHELL )) && command -v omarchy >/dev/null; then
     omarchy restart shell

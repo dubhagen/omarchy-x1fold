@@ -66,17 +66,24 @@ Other folding PCs are untested. The accelerometer map and native portrait panel 
 
 ## Install
 
-From this repo:
+`omarchy plugin add` copies this repo into the plugins directory and enables the bar widget. Keybindings, the on-screen keyboard, clamshell insets, and the reserved area come from `setup.sh`, which you run from that checkout:
 
 ```bash
-git clone <this-repo> ~/Projects/omarchy/x1fold-plugin
+omarchy plugin add https://github.com/dubhagen/omarchy-x1fold.git --enable
+~/.config/omarchy/plugins/dubhagen.x1fold/setup.sh
+```
+
+A separate checkout works too. `setup.sh` symlinks it to `~/.config/omarchy/plugins/dubhagen.x1fold`. When the checkout is already that directory, it stays a normal folder.
+
+```bash
+git clone https://github.com/dubhagen/omarchy-x1fold.git ~/Projects/omarchy/x1fold-plugin
 cd ~/Projects/omarchy/x1fold-plugin
 ./setup.sh
 ```
 
 `setup.sh` will:
 
-1. Symlink this checkout to `~/.config/omarchy/plugins/dubhagen.x1fold`
+1. Use this checkout as `~/.config/omarchy/plugins/dubhagen.x1fold`
 2. Put `x1fold` on your `PATH` (`~/.local/bin/x1fold`)
 3. Enable the bar widget (right section)
 4. Build `wvkbd-deskintl` into `~/.local/bin` and install keybindings, layer rules, TrackPoint-keyboard input, and Omarchy menu entries
@@ -92,20 +99,14 @@ To also install the Bluetooth-keyboard-at-LUKS initramfs hook, the libinput quir
 ./setup.sh --boot
 ```
 
-Once the repo is on git hosting, you can also clone it through Omarchy:
+Uninstall desktop integration before removing the plugin. `omarchy plugin remove` deletes the checkout, and `setup.sh` is inside it.
 
 ```bash
-omarchy plugin add <git-url> --enable
-# still run setup.sh from the clone for keybindings / OSK / layer rules
+~/.config/omarchy/plugins/dubhagen.x1fold/setup.sh --uninstall
+omarchy plugin remove dubhagen.x1fold
 ```
 
-Uninstall desktop integration (does not delete this checkout):
-
-```bash
-./setup.sh --uninstall
-```
-
-That leaves `dubhagen.power`, the overlay clones (`dubhagen.menu`, `dubhagen.image-picker`, `dubhagen.osd`, `dubhagen.clipboard`, `dubhagen.emojis`), and `~/.local/bin/x1fold-battery-status` installed. The power panel still calls that command. Without a clamshell `state.json` the insets stay inactive. The menu clone still lists Apps from desktop entries, because the shell proxy drops those objects even on the full panel.
+That leaves `dubhagen.power`, the overlay clones (`dubhagen.menu`, `dubhagen.image-picker`, `dubhagen.osd`, `dubhagen.clipboard`, `dubhagen.emojis`), and `~/.local/bin/x1fold-battery-status` installed. The power panel still calls that command. Without a clamshell `state.json` the insets stay inactive. The menu clone still lists Apps from desktop entries, because the shell proxy drops those objects even on the full panel. A development symlink is removed by `--uninstall`. A checkout created by `omarchy plugin add` stays until `omarchy plugin remove`.
 
 ## Usage
 
@@ -224,7 +225,7 @@ Runtime state (not in git) lives at `~/.local/state/omarchy/x1fold/state.json`. 
 omarchy restart shell
 ```
 
-`setup.sh` points `~/.config/omarchy/plugins/dubhagen.x1fold` at this directory, so the checkout *is* the live plugin.
+`setup.sh` makes this checkout the live plugin. A separate directory is symlinked to `~/.config/omarchy/plugins/dubhagen.x1fold`. A checkout that is already that directory stays a normal folder, which is what `omarchy plugin add` creates.
 
 ## Credits
 
