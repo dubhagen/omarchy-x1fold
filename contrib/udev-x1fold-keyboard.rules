@@ -7,6 +7,9 @@ ACTION=="add|change", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", \
   ATTRS{idVendor}=="17ef", ATTRS{idProduct}=="6142", \
   ENV{ID_INTEGRATION}="internal"
 
-ACTION=="add|change", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", \
-  ATTRS{idVendor}=="17ef", ATTRS{idProduct}=="613e", \
+# Bluetooth uhid has no USB parent, so idVendor never matches 17ef:613e.
+# The HID node is named 0005:17EF:613E.<instance>. This file is 66-, so it
+# runs after 65-integration.rules has tagged bluetooth external.
+ACTION=="add|change", KERNEL=="event*", SUBSYSTEM=="input", \
+  ENV{ID_INPUT_KEYBOARD}=="1", KERNELS=="0005:17EF:613E.*", \
   ENV{ID_INTEGRATION}="internal"

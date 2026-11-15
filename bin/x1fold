@@ -1202,6 +1202,18 @@ FOLIO_INPUT_NAMES = (
 )
 
 
+def refresh_dwt_timeout() -> None:
+    """Push the longer typing pause onto touchpads that are already open.
+
+    The compositor plugin registers `hyprctl x1folddwt`. A new folio touchpad
+    starts at libinput's 500 ms default until this runs.
+    """
+    try:
+        run(["hyprctl", "x1folddwt"], check=False)
+    except FileNotFoundError:
+        pass
+
+
 def folio_input_nodes() -> frozenset[str]:
     root = Path("/sys/class/input")
     if not root.is_dir():
@@ -2430,6 +2442,7 @@ def cmd_daemon(_state: dict) -> int:
     sync_fs_seen: set[str] = set()
     folio_nodes = folio_input_nodes()
     folio_reveal_at = 0.0
+    refresh_dwt_timeout()
     while True:
         nodes = folio_input_nodes()
         if nodes != folio_nodes:
@@ -2437,6 +2450,7 @@ def cmd_daemon(_state: dict) -> int:
             folio_nodes = nodes
             if appeared:
                 folio_reveal_at = time.monotonic() + 0.8
+                refresh_dwt_timeout()
             elif not nodes:
                 folio_reveal_at = 0.0
         pen_hold.sync(pen_mouse_wanted())
@@ -2565,6 +2579,7 @@ def cmd_daemon(_state: dict) -> int:
                     reveal_cursor_after_folio(state)
             except SystemExit:
                 pass
+            refresh_dwt_timeout()
 
         try:
             with locked_state() as state:

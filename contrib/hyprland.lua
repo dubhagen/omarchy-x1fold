@@ -173,3 +173,12 @@ o.bind("SUPER + F", "Full screen", function()
   end
   hl.dispatch(hl.dsp.window.fullscreen({ mode = "fullscreen" }))
 end)
+
+-- Disable-while-typing's pause after the last key. Hyprland has no timeout
+-- keyword; this plugin asks libinput for 1500 ms. A missing .so is skipped.
+local x1fold_dwt = (os.getenv("HOME") or "") .. "/.config/omarchy/plugins/dubhagen.x1fold/contrib/dwt/x1fold-dwt.so"
+local x1fold_dwt_file = io.open(x1fold_dwt, "rb")
+if x1fold_dwt_file then
+  x1fold_dwt_file:close()
+  hl.plugin.load(x1fold_dwt)
+end

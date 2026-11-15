@@ -157,7 +157,11 @@ The panel slider steps by 5 px, with − / + on either side. The same value is `
 
 ## Folio keyboard
 
-The ThinkPad TrackPoint Keyboard presents as an external HID on Bluetooth (`17ef:613e`, `X1FKeyboard` or `ThinkPad Bluetooth TrackPoint Keyboard`) and USB-C (`17ef:6142`, Primax). Stock libinput will not suppress its touchpad or TrackPoint while typing. The plugin’s Hyprland device block turns disable-while-typing on those pointers (both names and both buses) and uses a slower key-repeat. Tap-to-click stays on. `./setup.sh --boot` also installs a libinput quirk (`/etc/libinput/local-overrides.quirks`) plus a udev hwdb/rule that marks the keyboard and touchpad internal so typing actually pairs with those pointers.
+The ThinkPad TrackPoint Keyboard presents as an external HID on Bluetooth (`17ef:613e`, `X1FKeyboard` or `ThinkPad Bluetooth TrackPoint Keyboard`) and USB-C (`17ef:6142`, Primax). Stock libinput will not suppress its touchpad while you type on an external keyboard. The plugin’s Hyprland device block turns disable-while-typing on those pointers (both names and both buses) and uses a slower key-repeat. Tap-to-click stays on.
+
+Once typing is underway, libinput keeps the touchpad off for 500 ms after the last key. Hyprland 0.56 has no setting for that pause (libinput allows 100–5000 ms). `setup.sh` builds `contrib/dwt/x1fold-dwt.so` and loads it; that asks libinput for 1500 ms. The first key after a gap still uses libinput’s fixed 200 ms latch. The longer pause applies from the next key until you stop.
+
+The timer starts only when libinput treats the keyboard as internal. Bluetooth uhid has no USB `idVendor`, so a rule that matches `17ef:613e` that way never hits, and an unknown key in `/etc/libinput/local-overrides.quirks` makes libinput ignore every quirk file. `setup.sh` points the next Hyprland start at `~/.local/share/x1fold/libinput-quirks` (the system quirks, plus this keyboard marked internal), which skips that broken override. `./setup.sh --boot` replaces the override and installs a udev rule that matches the Bluetooth HID parent (`0005:17EF:613E.*`). After that rule is installed, switching the keyboard off and on pairs it in the current session.
 
 Omarchy hides the cursor on a key press until the pointer moves. Bringing this keyboard back emits keys, so the cursor vanishes, and the touchpad’s first events are jumps that libinput throws away. The daemon then places the cursor in the visible half, which shows it again. The trackpoint does the same thing by hand.
 

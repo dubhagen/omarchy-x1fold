@@ -473,6 +473,88 @@ Install: pacman -S --needed base-devel wayland pango cairo libxkbcommon"
   log "on-screen keyboard → $WVKBD_BIN"
 }
 
+# Hyprland 0.56 has no disable_while_typing timeout. This .so calls libinput.
+# -fno-gnu-unique keeps the compositor's inline globals intact.
+build_dwt_plugin() {
+  local src="$REPO/contrib/dwt/dwt.cpp"
+  local out="$REPO/contrib/dwt/x1fold-dwt.so"
+  if ! command -v g++ >/dev/null || ! pkg-config --exists hyprland libinput; then
+    warn "touchpad typing pause not built (need g++ and hyprland headers)"
+    rm -f "$out"
+    return 0
+  fi
+  # shellcheck disable=SC2046
+  g++ -shared -fPIC -fno-gnu-unique -std=c++26 \
+    $(pkg-config --cflags hyprland) \
+    -o "$out" "$src" \
+    $(pkg-config --libs libinput)
+  log "touchpad typing pause → $out"
+}
+
+DWT_QUIRKS_DIR="${HOME}/.local/share/x1fold/libinput-quirks"
+UWSM_ENV="${HOME}/.config/uwsm/env-hyprland"
+UWSM_MARK_BEGIN="# dubhagen.x1fold: begin"
+UWSM_MARK_END="# dubhagen.x1fold: end"
+
+# libinput reads /etc/libinput/local-overrides.quirks and, if that file has an
+# unknown key, drops every quirk. Setting LIBINPUT_QUIRKS_DIR skips that file.
+# The directory is the system quirks plus this keyboard marked internal.
+install_dwt_quirks() {
+  [[ -d /usr/share/libinput ]] || {
+    warn "no /usr/share/libinput; leaving the typing-pause quirks unset"
+    return 0
+  }
+  mkdir -p "$DWT_QUIRKS_DIR"
+  find "$DWT_QUIRKS_DIR" -maxdepth 1 -type l -delete
+  local f
+  for f in /usr/share/libinput/*.quirks; do
+    [[ -e $f ]] || continue
+    ln -s "$f" "$DWT_QUIRKS_DIR/$(basename "$f")"
+  done
+  install -m 644 "$REPO/contrib/libinput-x1fold.quirks" "$DWT_QUIRKS_DIR/90-x1fold-keyboard.quirks"
+  mkdir -p "$(dirname "$UWSM_ENV")"
+  local block
+  block=$(cat <<EOF
+$UWSM_MARK_BEGIN
+# Skip /etc/libinput/local-overrides.quirks so one bad key cannot drop every quirk.
+export LIBINPUT_QUIRKS_DIR="\$HOME/.local/share/x1fold/libinput-quirks"
+$UWSM_MARK_END
+EOF
+)
+  python3 - "$UWSM_ENV" "$UWSM_MARK_BEGIN" "$UWSM_MARK_END" "$block" <<'PY'
+import pathlib, re, sys
+path, begin, end, block = sys.argv[1:]
+text = pathlib.Path(path).read_text() if pathlib.Path(path).exists() else ""
+pattern = re.escape(begin) + r".*?" + re.escape(end) + r"\n?"
+if begin in text and end in text:
+    text = re.sub(pattern, block.rstrip() + "\n", text, count=1, flags=re.S)
+else:
+    if text and not text.endswith("\n"):
+        text += "\n"
+    text = text.rstrip() + ("\n\n" if text.strip() else "") + block.rstrip() + "\n"
+pathlib.Path(path).write_text(text)
+PY
+  log "folio keyboard quirks → $DWT_QUIRKS_DIR (next Hyprland start)"
+}
+
+remove_dwt_quirks() {
+  if [[ -f $UWSM_ENV ]]; then
+    python3 - "$UWSM_ENV" "$UWSM_MARK_BEGIN" "$UWSM_MARK_END" <<'PY'
+import pathlib, re, sys
+path, begin, end = sys.argv[1:]
+file = pathlib.Path(path)
+if not file.exists():
+    raise SystemExit
+text = re.sub(re.escape(begin) + r".*?" + re.escape(end) + r"\n?", "", file.read_text(), flags=re.S)
+if text.strip():
+    file.write_text(text)
+else:
+    file.unlink()
+PY
+  fi
+  rm -rf "$DWT_QUIRKS_DIR"
+}
+
 strip_gtk_css_block() {
   local file="${HOME}/.config/gtk-3.0/gtk.css"
   [[ -f $file ]] || return 0
@@ -500,6 +582,8 @@ install_desktop() {
   patch_marked_lua "$HYPR/input.lua" "$REPO/contrib/input.lua"
   mkdir -p "${HOME}/.config/libinput"
   install -m 644 "$REPO/contrib/libinput-x1fold.quirks" "${HOME}/.config/libinput/local-overrides.quirks"
+  build_dwt_plugin
+  install_dwt_quirks
   strip_gtk_css_block
   merge_menu "$MENU"
   log "Hyprland bindings, autostart, layer rules, keyboard input, and menu entries installed"
@@ -548,6 +632,7 @@ do_uninstall() {
   strip_marked_lua "$HYPR/input.lua"
   strip_menu "$MENU"
   strip_gtk_css_block
+  remove_dwt_quirks
   if [[ -L $BIN_LINK ]]; then
     rm -f "$BIN_LINK"
   fi
