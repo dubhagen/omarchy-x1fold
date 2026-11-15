@@ -157,7 +157,9 @@ The panel slider steps by 5 px, with − / + on either side. The same value is `
 
 ## Folio keyboard
 
-The ThinkPad TrackPoint Keyboard presents as an external HID on Bluetooth (`17ef:613e`, `X1FKeyboard`) and USB-C (`17ef:6142`, Primax). Stock libinput will not suppress its touchpad or TrackPoint while typing. The plugin’s Hyprland device block turns disable-while-typing on those pointers (both bus names) and uses a slower key-repeat. Tap-to-click stays on. `./setup.sh --boot` also installs a libinput quirk (`/etc/libinput/local-overrides.quirks`) plus a udev hwdb/rule that marks the keyboard and touchpad internal so typing actually pairs with those pointers.
+The ThinkPad TrackPoint Keyboard presents as an external HID on Bluetooth (`17ef:613e`, `X1FKeyboard` or `ThinkPad Bluetooth TrackPoint Keyboard`) and USB-C (`17ef:6142`, Primax). Stock libinput will not suppress its touchpad or TrackPoint while typing. The plugin’s Hyprland device block turns disable-while-typing on those pointers (both names and both buses) and uses a slower key-repeat. Tap-to-click stays on. `./setup.sh --boot` also installs a libinput quirk (`/etc/libinput/local-overrides.quirks`) plus a udev hwdb/rule that marks the keyboard and touchpad internal so typing actually pairs with those pointers.
+
+Omarchy hides the cursor on a key press until the pointer moves. Bringing this keyboard back emits keys, so the cursor vanishes, and the touchpad’s first events are jumps that libinput throws away. The daemon then places the cursor in the visible half, which shows it again. The trackpoint does the same thing by hand.
 
 USB-C DWT (internal keyboard/touchpad tagging, Primax USB device names) follows [harshach/x1fold](https://github.com/harshach/x1fold).
 

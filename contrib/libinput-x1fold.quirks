@@ -3,10 +3,10 @@
 #   USB-C      17ef:6142  Primax "... Keyboard - USB"
 #
 # Generic bluetooth keyboards are AttrKeyboardIntegration=external, so
-# disable-while-typing never sees them. USB touchpads are tagged external
-# the same way. Treat this folio's keyboard + touchpad as internal so DWT
-# pairs them and libinput enables edge palm detection. The touchpad has no
-# pressure/size axes, so AttrPalmPressureThreshold is a no-op.
+# disable-while-typing never sees them. Mark these keyboards internal.
+# The touchpad is marked internal by the hwdb (ID_INPUT_TOUCHPAD_INTEGRATION).
+# There is no AttrTouchpadIntegration key: an unknown key makes libinput
+# reject every quirk file, including the ones it ships.
 
 [Lenovo X1 Fold TrackPoint Keyboard Bluetooth]
 MatchUdevType=keyboard
@@ -15,23 +15,9 @@ MatchVendor=0x17EF
 MatchProduct=0x613E
 AttrKeyboardIntegration=internal
 
-[Lenovo X1 Fold TrackPoint Keyboard Bluetooth Touchpad]
-MatchUdevType=touchpad
-MatchBus=bluetooth
-MatchVendor=0x17EF
-MatchProduct=0x613E
-AttrTouchpadIntegration=internal
-
 [Lenovo X1 Fold TrackPoint Keyboard USB]
 MatchUdevType=keyboard
 MatchBus=usb
 MatchVendor=0x17EF
 MatchProduct=0x6142
 AttrKeyboardIntegration=internal
-
-[Lenovo X1 Fold TrackPoint Keyboard USB Touchpad]
-MatchUdevType=touchpad
-MatchBus=usb
-MatchVendor=0x17EF
-MatchProduct=0x6142
-AttrTouchpadIntegration=internal

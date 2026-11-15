@@ -36,6 +36,13 @@ x1fold_pointer("x1fkeyboard-mouse")
 x1fold_pointer("x1fkeyboard-1")
 x1fold_keyboard("x1fkeyboard")
 
+-- Same keyboard after a BlueZ resume, when the HID name is the long one.
+x1fold_touchpad("thinkpad-bluetooth-trackpoint-keyboard-touchpad")
+x1fold_pointer("thinkpad-bluetooth-trackpoint-keyboard-mouse")
+x1fold_pointer("thinkpad-bluetooth-trackpoint-keyboard-1")
+x1fold_pointer("thinkpad-bluetooth-trackpoint-keyboard-2")
+x1fold_keyboard("thinkpad-bluetooth-trackpoint-keyboard")
+
 x1fold_touchpad("primax-electronics-ltd.-thinkpad-bluetooth-trackpoint-keyboard---usb-touchpad")
 x1fold_pointer("primax-electronics-ltd.-thinkpad-bluetooth-trackpoint-keyboard---usb-1")
 x1fold_pointer("primax-electronics-ltd.-thinkpad-bluetooth-trackpoint-keyboard---usb-2")

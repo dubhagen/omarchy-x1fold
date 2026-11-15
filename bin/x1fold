@@ -1192,6 +1192,70 @@ def restore_cursor_after_screensaver() -> None:
     eval_cursor(invisible=False, no_hardware_cursors=hw)
 
 
+# Names the folio keyboard has used. A resume emits keys, and Omarchy hides
+# the cursor on any key until the pointer moves. The touchpad's first events
+# are jumps libinput discards, so that pointer cannot bring it back, and the
+# hidden spot may be the covered half under the keys.
+FOLIO_INPUT_NAMES = (
+    "ThinkPad Bluetooth TrackPoint Keyboard",
+    "X1FKeyboard",
+)
+
+
+def folio_input_nodes() -> frozenset[str]:
+    root = Path("/sys/class/input")
+    if not root.is_dir():
+        return frozenset()
+    found: set[str] = set()
+    for event in root.glob("event*"):
+        try:
+            name = (event / "device" / "name").read_text(errors="replace").strip()
+        except OSError:
+            continue
+        if any(name.startswith(prefix) for prefix in FOLIO_INPUT_NAMES):
+            found.add(event.name)
+    return frozenset(found)
+
+
+def cursor_pos() -> tuple[int, int] | None:
+    try:
+        out = (run(["hyprctl", "cursorpos"], check=False).stdout or "").strip()
+    except FileNotFoundError:
+        return None
+    parts = out.replace(",", " ").split()
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+
+
+def reveal_cursor_after_folio(state: dict) -> None:
+    """Unhide the pointer after the folio keyboard reappears.
+
+    hl.dsp.cursor.move runs simulateMouseMovement, which is the signal
+    Hyprland uses to clear hide_on_key_press. In clamshell, a cursor left
+    in the covered band is moved into the visible half first.
+    """
+    pos = cursor_pos()
+    if pos is None:
+        return
+    x, y = pos
+    target_x, target_y = x, y
+    if state.get("clamshell"):
+        try:
+            mon = pick_monitor(state)
+        except SystemExit:
+            mon = None
+        if mon:
+            vx, vy, vw, vh = usable_rect(mon, state)
+            if y < vy or y >= vy + vh or x < vx or x >= vx + vw:
+                target_x = min(max(x, vx + 8), vx + max(8, vw - 8))
+                target_y = vy + max(8, vh // 2)
+    dispatch_lua(f"hl.dsp.cursor.move({{ x = {int(target_x)}, y = {int(target_y)} }})")
+
+
 def usable_rect(mon: dict, state: dict, *, saver: bool | None = None) -> tuple[int, int, int, int]:
     """Viewport above the folio cover and the on-screen keyboard.
 
@@ -2364,7 +2428,17 @@ def cmd_daemon(_state: dict) -> int:
     remap_at: dict[str, float] = {}
     sync_off: set[str] = set()
     sync_fs_seen: set[str] = set()
+    folio_nodes = folio_input_nodes()
+    folio_reveal_at = 0.0
     while True:
+        nodes = folio_input_nodes()
+        if nodes != folio_nodes:
+            appeared = bool(nodes) and not folio_nodes
+            folio_nodes = nodes
+            if appeared:
+                folio_reveal_at = time.monotonic() + 0.8
+            elif not nodes:
+                folio_reveal_at = 0.0
         pen_hold.sync(pen_mouse_wanted())
         now = time.monotonic()
         saver = screensaver_running()
@@ -2481,6 +2555,14 @@ def cmd_daemon(_state: dict) -> int:
                 with locked_state() as state:
                     apply(state, quiet=True)
                 last_apply = time.monotonic()
+            except SystemExit:
+                pass
+
+        if folio_reveal_at and time.monotonic() >= folio_reveal_at:
+            folio_reveal_at = 0.0
+            try:
+                with locked_state() as state:
+                    reveal_cursor_after_folio(state)
             except SystemExit:
                 pass
 
