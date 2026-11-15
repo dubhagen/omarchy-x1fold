@@ -1,4 +1,5 @@
 import QtQuick
+import QtMultimedia
 import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Io
@@ -81,6 +82,7 @@ Item {
         statusLabel = orientationIndex === 1 ? "Landscape (flipped)" : "Landscape"
         statusIcon = clamshell ? "󰌌" : "󰹑"
       }
+      root.syncMotionHold()
     } catch (e) {}
   }
 
@@ -1032,10 +1034,99 @@ Item {
     startDaemon()
     applyProc.running = true
     root.requestOverlayConstrain()
+    root.requestBackgroundResolve()
+  }
+
+  Component.onDestruction: {
+    if (root.oweHeld)
+      Util.execDetached("owe resume")
   }
 
   readonly property string wallpaperLink: root.home + "/.local/state/omarchy/current/background"
   property int wallpaperRev: 0
+  // The symlink name has no extension. readlink -f is what says video vs still.
+  property string backgroundTarget: ""
+  property bool backgroundMotion: false
+  property bool motionFailed: false
+  property string motionUrl: ""
+  property bool oweWantHold: false
+  property bool oweHeld: false
+  property bool backgroundResolvePending: false
+
+  function isMotionPath(path) {
+    return /\.(mp4|m4v|mov|webm|mkv|avi|gif)$/i.test(String(path || ""))
+  }
+
+  function motionSourceUrl(path) {
+    if (!path)
+      return ""
+    var parts = String(path).split("/")
+    for (var i = 0; i < parts.length; i++)
+      parts[i] = encodeURIComponent(parts[i])
+    return "file://" + parts.join("/")
+  }
+
+  function requestBackgroundResolve() {
+    if (backgroundResolve.running) {
+      backgroundResolvePending = true
+      return
+    }
+    backgroundResolve.running = true
+  }
+
+  // The stock renderer draws video across the whole output. While this layer
+  // is showing the cropped copy, pause that renderer so only one decoder runs.
+  // Resume only a pause we took. A pause the user already set stays put.
+  function syncMotionHold() {
+    if (!motionPlayer)
+      return
+    var show = root.clamshell && root.backgroundMotion && root.backgroundTarget !== "" && !root.motionFailed
+    var was = root.oweWantHold
+    root.oweWantHold = show
+    if (show) {
+      var url = root.motionSourceUrl(root.backgroundTarget)
+      if (url !== root.motionUrl) {
+        root.motionFailed = false
+        root.motionUrl = url
+        // A source swap while the player is already running does not start
+        // the new file on its own.
+        motionPlayer.stop()
+        motionPlayer.source = url
+        motionPlayer.play()
+      } else if (motionPlayer.playbackState !== MediaPlayer.PlayingState) {
+        motionPlayer.play()
+      }
+      if (!was) {
+        if (!oweQuery.running)
+          oweQuery.running = true
+        oweRecheck.restart()
+      }
+      return
+    }
+    if (motionPlayer.playbackState !== MediaPlayer.StoppedState)
+      motionPlayer.stop()
+    oweRecheck.stop()
+    if (was)
+      root.releaseOwe()
+  }
+
+  function releaseOwe() {
+    if (!root.oweHeld && !owePause.running)
+      return
+    if (!oweResume.running)
+      oweResume.running = true
+  }
+
+  property var motionVideoItem: null
+  function attachMotionVideo(item) {
+    if (!item || !motionPlayer)
+      return
+    root.motionVideoItem = item
+    if (motionPlayer.videoOutput !== item)
+      motionPlayer.videoOutput = item
+    if (root.oweWantHold && !root.motionFailed && motionPlayer.playbackState !== MediaPlayer.PlayingState)
+      motionPlayer.play()
+  }
 
   FileView {
     path: root.wallpaperLink
@@ -1044,8 +1135,141 @@ Item {
     onFileChanged: {
       reload()
       root.wallpaperRev++
+      root.requestBackgroundResolve()
     }
-    onLoaded: root.wallpaperRev++
+    onLoaded: {
+      root.wallpaperRev++
+      root.requestBackgroundResolve()
+    }
+  }
+
+  // omarchy-theme-bg-set replaces this symlink and then tells the shell.
+  // Watching the link follows the old target, so a new picture or video
+  // never reached this layer and the paused stock renderer kept the previous one.
+  Process {
+    id: backgroundWatch
+    running: true
+    command: [
+      "inotifywait", "-m", "-q",
+      "-e", "create,delete,move",
+      "--format", "%f",
+      root.home + "/.local/state/omarchy/current"
+    ]
+    stdout: SplitParser {
+      onRead: function (name) {
+        if (String(name || "").trim() === "background")
+          root.requestBackgroundResolve()
+      }
+    }
+    onExited: backgroundWatchRestart.restart()
+  }
+
+  Timer {
+    id: backgroundWatchRestart
+    interval: 1000
+    repeat: false
+    onTriggered: if (!backgroundWatch.running) backgroundWatch.running = true
+  }
+
+  Process {
+    id: backgroundResolve
+    command: ["readlink", "-f", root.wallpaperLink]
+    stdout: StdioCollector { id: backgroundResolveOut; waitForEnd: true }
+    onExited: function (exitCode) {
+      var lines = String(backgroundResolveOut.text || "").trim().split("\n")
+      var path = exitCode === 0 ? String(lines[lines.length - 1] || "").trim() : ""
+      if (!path)
+        path = root.wallpaperLink
+      var same = path === root.backgroundTarget
+      root.backgroundTarget = path
+      root.backgroundMotion = root.isMotionPath(path)
+      if (!same) {
+        root.motionFailed = false
+        root.motionUrl = ""
+        // The switcher replaces the symlink and tells the shell over IPC.
+        // Nothing else notices that, so the still has to be cache-busted here.
+        root.wallpaperRev++
+      }
+      root.syncMotionHold()
+      if (root.backgroundResolvePending) {
+        root.backgroundResolvePending = false
+        root.requestBackgroundResolve()
+      }
+    }
+  }
+
+  Process {
+    id: oweQuery
+    command: ["owe", "status"]
+    stdout: StdioCollector { id: oweQueryOut; waitForEnd: true }
+    onExited: function (exitCode) {
+      if (!root.oweWantHold || exitCode !== 0)
+        return
+      var raw = String(oweQueryOut.text || "")
+      var start = raw.lastIndexOf("{")
+      var end = raw.lastIndexOf("}")
+      if (start < 0 || end < start)
+        return
+      var manual = false
+      try {
+        manual = JSON.parse(raw.slice(start, end + 1)).manual_pause === true
+      } catch (e) {
+        return
+      }
+      if (!manual && !owePause.running)
+        owePause.running = true
+    }
+  }
+
+  Process {
+    id: owePause
+    command: ["owe", "pause"]
+    onExited: function (exitCode) {
+      if (exitCode === 0)
+        root.oweHeld = true
+      if (!root.oweWantHold)
+        root.releaseOwe()
+    }
+  }
+
+  Process {
+    id: oweResume
+    command: ["owe", "resume"]
+    onExited: function (exitCode) {
+      if (exitCode === 0)
+        root.oweHeld = false
+      if (root.oweWantHold && !root.oweHeld && !oweQuery.running)
+        oweQuery.running = true
+    }
+  }
+
+  Timer {
+    id: oweRecheck
+    interval: 400
+    repeat: false
+    onTriggered: {
+      if (root.oweWantHold && !oweQuery.running)
+        oweQuery.running = true
+    }
+  }
+
+  MediaPlayer {
+    id: motionPlayer
+    loops: MediaPlayer.Infinite
+    audioOutput: AudioOutput {
+      muted: true
+      volume: 0
+    }
+    onErrorOccurred: function (error, errorString) {
+      if (error === MediaPlayer.NoError || !root.oweWantHold)
+        return
+      root.motionFailed = true
+      oweRecheck.stop()
+      if (playbackState !== MediaPlayer.StoppedState)
+        stop()
+      root.oweWantHold = false
+      root.releaseOwe()
+    }
   }
 
   IpcHandler {
@@ -1134,12 +1358,28 @@ Item {
       exclusionMode: ExclusionMode.Ignore
       mask: Region {}
 
+      Component.onCompleted: {
+        if (String(modelData.name || "").indexOf("eDP") === 0)
+          root.attachMotionVideo(motionVideo)
+      }
+
       Image {
         anchors.fill: parent
-        source: "file://" + root.wallpaperLink + "?" + root.wallpaperRev
+        visible: !root.backgroundMotion && root.backgroundTarget !== ""
+        source: (!root.backgroundMotion && root.backgroundTarget !== "") ? ("file://" + root.wallpaperLink + "?" + root.wallpaperRev) : ""
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         cache: false
+      }
+
+      // Same crop as the still. The stock video layer stays full-output, so
+      // this layer is the one that covers the visible half.
+      VideoOutput {
+        id: motionVideo
+        anchors.fill: parent
+        visible: root.backgroundMotion && !root.motionFailed
+        fillMode: VideoOutput.PreserveAspectCrop
+        endOfStreamPolicy: VideoOutput.KeepLastFrame
       }
     }
   }

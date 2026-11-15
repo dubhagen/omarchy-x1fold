@@ -18,6 +18,7 @@ Commands:
   constrain-screensaver [address]
   dismiss-screensaver
   fullscreen toggle|on|off [address]
+  place-floating [address]
   sync-bar
   cursor hide|show
   daemon
@@ -445,6 +446,11 @@ def apply(state: dict, quiet: bool = False) -> dict:
         set_osk_visible(False)
     constrain_fullscreen(state)
     sync_bar(state)
+    # The reserved box is live now. Floating-mode windows that still use the
+    # full panel get moved into it. Turning the viewport off does not move
+    # them back.
+    if viewport_limited(state):
+        place_floating_windows(state)
     if not quiet:
         announce(state)
     return state
@@ -1484,6 +1490,218 @@ def client_tags(client: dict) -> list[str]:
     if isinstance(tags, str):
         return [tags]
     return [str(t) for t in tags] if isinstance(tags, list) else []
+
+
+# Omarchy's floating layout: min(1100, width * 0.64) by min(760, height * 0.68).
+# The open rule feeds it the full output. A window already that size, or still
+# sitting on the full-panel center, is the one this command recenters.
+FLOAT_OPEN_MAX_W = 1100
+FLOAT_OPEN_MAX_H = 760
+FLOAT_OPEN_W_RATIO = 0.64
+FLOAT_OPEN_H_RATIO = 0.68
+FLOAT_SIZE_TOL = 8
+FLOAT_CENTER_TOL = 80
+MODE_FLOAT_TAGS = ("omarchy-mode-opened", "omarchy-mode-floated")
+
+
+def _bare_tag(tag: str) -> str:
+    text = str(tag)
+    return text[:-1] if text.endswith("*") else text
+
+
+def monitor_reserved(mon: dict) -> tuple[int, int, int, int]:
+    """hyprctl reserved is [left, top, right, bottom] in logical pixels."""
+    reserved = mon.get("reserved")
+    if isinstance(reserved, dict):
+        return (
+            int(reserved.get("left") or 0),
+            int(reserved.get("top") or 0),
+            int(reserved.get("right") or 0),
+            int(reserved.get("bottom") or 0),
+        )
+    if isinstance(reserved, (list, tuple)) and len(reserved) >= 4:
+        return int(reserved[0]), int(reserved[1]), int(reserved[2]), int(reserved[3])
+    return 0, 0, 0, 0
+
+
+def float_open_size(width: int, height: int) -> tuple[int, int]:
+    # Positive products truncate toward zero, matching Hyprland math.floor.
+    return (
+        min(FLOAT_OPEN_MAX_W, int(width * FLOAT_OPEN_W_RATIO)),
+        min(FLOAT_OPEN_MAX_H, int(height * FLOAT_OPEN_H_RATIO)),
+    )
+
+
+def client_on_monitor(client: dict, monitors: list[dict]) -> dict | None:
+    mid = client.get("monitor")
+    for mon in monitors:
+        if mon.get("id") == mid:
+            return mon
+    return None
+
+
+def _box_numbers(client: dict) -> tuple[int, int, int, int] | None:
+    at = client.get("at") or [0, 0]
+    size = client.get("size") or [0, 0]
+    try:
+        return int(at[0]), int(at[1]), int(size[0]), int(size[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def viewport_float_target(mon: dict, state: dict, client: dict) -> tuple[int, int, int, int]:
+    """Floating-mode size, centered in the live viewport.
+
+    The packaged rule uses the full output. place() subtracts the reserved
+    box for the size, then center() uses the whole panel, so either one
+    straddles the covered half. Keep a cascade of a few dozen pixels when
+    the window is still near that full-panel center.
+    """
+    transform = int(state.get("transform") or mon.get("transform") or 0) % 4
+    lw, lh = logical_size(mon, transform)
+    left, top, right, bottom = monitor_reserved(mon)
+    cover = reserved_bottom(
+        mon,
+        transform,
+        bool(state.get("clamshell")),
+        float(state.get("cover_ratio") or 0.50),
+        int(state.get("overlap_px") or 0),
+    )
+    bottom = max(bottom, cover + keyboard_inset(state))
+    origin_x = int(mon.get("x") or 0)
+    origin_y = int(mon.get("y") or 0)
+    vx = origin_x + left
+    vy = origin_y + top
+    vw = max(1, lw - left - right)
+    vh = max(1, lh - top - bottom)
+    width, height = float_open_size(vw, vh)
+    dx, dy = 0, 0
+    box = _box_numbers(client)
+    if box is not None:
+        ax, ay, sw, sh = box
+        dx = int(round((ax + sw / 2) - (origin_x + lw / 2)))
+        dy = int(round((ay + sh / 2) - (origin_y + lh / 2)))
+        if abs(dx) > FLOAT_CENTER_TOL or abs(dy) > FLOAT_CENTER_TOL:
+            dx, dy = 0, 0
+    x = vx + max(0, vw - width) // 2 + dx
+    y = vy + max(0, vh - height) // 2 + dy
+    if width >= vw:
+        x = vx
+    else:
+        x = min(max(x, vx), vx + vw - width)
+    if height >= vh:
+        y = vy
+    else:
+        y = min(max(y, vy), vy + vh - height)
+    return x, y, max(1, width), max(1, height)
+
+
+def floating_placement_is_full_panel(client: dict, mon: dict, state: dict) -> bool:
+    """True when the window still has the full-output floating placement.
+
+    A window the user has resized and dragged off that center is left alone.
+    """
+    transform = int(state.get("transform") or mon.get("transform") or 0) % 4
+    lw, lh = logical_size(mon, transform)
+    fw, fh = float_open_size(lw, lh)
+    box = _box_numbers(client)
+    if box is None:
+        return False
+    ax, ay, sw, sh = box
+    size_match = abs(sw - fw) <= FLOAT_SIZE_TOL and abs(sh - fh) <= FLOAT_SIZE_TOL
+    full_cx = int(mon.get("x") or 0) + lw / 2
+    full_cy = int(mon.get("y") or 0) + lh / 2
+    center_match = (
+        abs((ax + sw / 2) - full_cx) <= FLOAT_CENTER_TOL
+        and abs((ay + sh / 2) - full_cy) <= FLOAT_CENTER_TOL
+    )
+    return size_match or center_match
+
+
+def mode_float_candidate(client: dict) -> bool:
+    if is_screensaver(client) or not client.get("floating"):
+        return False
+    if int(client.get("fullscreen") or 0) != 0:
+        return False
+    if int(client.get("fullscreenClient") or 0) != 0:
+        return False
+    if client.get("pinned"):
+        return False
+    tags = {_bare_tag(tag) for tag in client_tags(client)}
+    if "x1fold-clamshell-fs" in tags:
+        return False
+    return any(tag in tags for tag in MODE_FLOAT_TAGS)
+
+
+def geometry_close(client: dict, x: int, y: int, w: int, h: int) -> bool:
+    box = _box_numbers(client)
+    if box is None:
+        return False
+    ax, ay, sw, sh = box
+    return abs(ax - x) <= 2 and abs(ay - y) <= 2 and abs(sw - w) <= 4 and abs(sh - h) <= 4
+
+
+def dispatch_viewport_float(addr: str, x: int, y: int, w: int, h: int) -> None:
+    sel = window_selector(addr)
+    # Same prop flush as float_to_usable_half. A deferred refresh puts the
+    # rule's full-panel box back on top of this move. Unknown float actions
+    # toggle on this Hyprland, so the action stays "on".
+    eval_lua(
+        'local win = "' + sel + '"\n'
+        'hl.dispatch(hl.dsp.window.set_prop({ prop = "no_anim", value = "1", window = win }))\n'
+        'hl.dispatch(hl.dsp.window.float({ action = "on", window = win }))\n'
+        "if hl.exec_scheduled_prop_refresh_immediately then "
+        "hl.exec_scheduled_prop_refresh_immediately() end\n"
+        f"hl.dispatch(hl.dsp.window.move({{ x = {int(x)}, y = {int(y)}, relative = false, window = win }}))\n"
+        f"hl.dispatch(hl.dsp.window.resize({{ x = {int(w)}, y = {int(h)}, relative = false, window = win }}))\n"
+        "if hl.exec_scheduled_prop_refresh_immediately then "
+        "hl.exec_scheduled_prop_refresh_immediately() end\n"
+        'hl.dispatch(hl.dsp.window.set_prop({ prop = "no_anim", value = "0", window = win }))\n'
+    )
+
+
+def place_floating_client(
+    client: dict, state: dict, monitors: list[dict], *, force: bool
+) -> bool:
+    if not mode_float_candidate(client):
+        return False
+    addr = str(client.get("address") or "")
+    if not addr:
+        return False
+    mon = client_on_monitor(client, monitors)
+    if mon is None or not is_internal(mon):
+        return False
+    if not force and not floating_placement_is_full_panel(client, mon, state):
+        return False
+    x, y, w, h = viewport_float_target(mon, state, client)
+    if geometry_close(client, x, y, w, h):
+        return True
+    dispatch_viewport_float(addr, x, y, w, h)
+    return True
+
+
+def place_floating_windows(state: dict, address: str | None = None) -> None:
+    """Move Omarchy floating-mode windows into the active viewport.
+
+    An address is a window that just opened, so it is placed even when its
+    box has not settled on the full-panel size yet. With no address, only
+    windows that still have that full-panel size or center are moved.
+    """
+    if not viewport_limited(state):
+        return
+    try:
+        monitors = hypr_monitors()
+    except SystemExit:
+        return
+    if address:
+        client = _client_by_addr(address)
+        clients = [client] if client else []
+        force = True
+    else:
+        clients = hypr_clients()
+        force = False
+    for client in clients:
+        place_floating_client(client, state, monitors, force=force)
 
 
 def clamshell_fs_live(client: dict) -> bool:
@@ -2699,6 +2917,8 @@ def main(argv: list[str]) -> int:
         return run_locked(cmd_constrain_screensaver, args[1] if len(args) > 1 else None)
     if cmd == "dismiss-screensaver":
         return run_locked(cmd_dismiss_screensaver)
+    if cmd == "place-floating":
+        return run_locked(lambda state: place_floating_windows(state, args[1] if len(args) > 1 else None) or 0)
     if cmd == "sync-bar":
         return run_locked(cmd_sync_bar)
     if cmd == "cursor":

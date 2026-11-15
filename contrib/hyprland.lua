@@ -68,6 +68,13 @@ local function x1fold_viewport(_mon)
   return x1fold_flag("clamshell") or x1fold_flag("osk")
 end
 
+local function x1fold_internal(mon)
+  local name = mon and mon.name or ""
+  return string.match(name, "^eDP%-")
+    or string.match(name, "^LVDS%-")
+    or string.match(name, "^DSI%-")
+end
+
 local function x1fold_has_tag(w, name)
   local tags = w and w.tags
   if type(tags) ~= "table" then
@@ -122,6 +129,25 @@ hl.on("window.open", function(w)
   end
   x1fold_ss_submap(true)
   hl.dispatch(hl.dsp.exec_cmd(x1fold .. " constrain-screensaver " .. tostring(w.address)))
+end)
+
+-- Omarchy's floating layout sizes a new window from the full output, so on
+-- this portrait panel it opens across the covered half. The open rule has
+-- already run. Re-place into the viewport once that box has landed.
+hl.on("window.open", function(w)
+  if w == nil or w.class == "org.omarchy.screensaver" then
+    return
+  end
+  if not x1fold_viewport(w.monitor) or not x1fold_internal(w.monitor) then
+    return
+  end
+  local addr = tostring(w.address or "")
+  if addr == "" then
+    return
+  end
+  hl.timer(function()
+    hl.dispatch(hl.dsp.exec_cmd(x1fold .. " place-floating " .. addr))
+  end, { type = "oneshot", timeout = 30 })
 end)
 
 hl.on("window.close", function(w)
@@ -181,4 +207,29 @@ local x1fold_dwt_file = io.open(x1fold_dwt, "rb")
 if x1fold_dwt_file then
   x1fold_dwt_file:close()
   hl.plugin.load(x1fold_dwt)
+end
+
+-- place() centers on the full monitor after it subtracts the reserved box.
+-- Correct those windows once a workspace changes mode. The tail is not
+-- allowed to fail the mode change itself. Turning the viewport off does
+-- not move the windows back.
+if type(o.workspace_mode) == "function" then
+  local x1fold_workspace_mode = o.workspace_mode
+  function o.workspace_mode(spec)
+    x1fold_workspace_mode(spec)
+    pcall(function()
+      if not x1fold_viewport(nil) then
+        return
+      end
+      hl.timer(function()
+        hl.dispatch(hl.dsp.exec_cmd(x1fold .. " place-floating"))
+      end, { type = "oneshot", timeout = 30 })
+    end)
+  end
+end
+
+if x1fold_viewport(nil) then
+  hl.timer(function()
+    hl.dispatch(hl.dsp.exec_cmd(x1fold .. " place-floating"))
+  end, { type = "oneshot", timeout = 30 })
 end
