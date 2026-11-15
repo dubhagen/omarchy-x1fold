@@ -1,18 +1,18 @@
 -- OLED keyboard-half mask: no fade, stay put.
-hl.layer_rule({ match = { namespace = "mattd-x1fold-mask" }, no_anim = true, animation = "none" })
-hl.layer_rule({ match = { namespace = "mattd-x1fold-wallpaper" }, no_anim = true, animation = "none" })
-hl.layer_rule({ match = { namespace = "mattd-x1fold-ss-dismiss" }, no_anim = true, animation = "none", order = 50 })
+hl.layer_rule({ match = { namespace = "dubhagen-x1fold-mask" }, no_anim = true, animation = "none" })
+hl.layer_rule({ match = { namespace = "dubhagen-x1fold-wallpaper" }, no_anim = true, animation = "none" })
+hl.layer_rule({ match = { namespace = "dubhagen-x1fold-ss-dismiss" }, no_anim = true, animation = "none", order = 50 })
 -- The strip is a Top layer (above fullscreen, below Overlay). wvkbd is
 -- Overlay, so the keys stay above it. order 10 keeps the strip behind any
 -- other Top surface that uses the default order.
-hl.layer_rule({ match = { namespace = "^mattd-x1fold-osk-mask$" }, no_anim = true, animation = "none", order = 10 })
+hl.layer_rule({ match = { namespace = "^dubhagen-x1fold-osk-mask$" }, no_anim = true, animation = "none", order = 10 })
 hl.layer_rule({ match = { namespace = "^wvkbd$" }, no_anim = true, order = 0 })
 
 -- Default is Omarchy's covering-fullscreen + slide. Clamshell apply()
 -- evals this named rule to a half-panel float; leaving tablet as
 -- fullscreen=false made the saver a tiny floating window.
 hl.window_rule({
-  name = "mattd.x1fold-screensaver",
+  name = "dubhagen.x1fold-screensaver",
   match = { class = "org.omarchy.screensaver" },
   decorate = false,
   rounding = 0,
@@ -24,7 +24,7 @@ hl.window_rule({
   animation = "slide",
 })
 hl.window_rule({
-  name = "mattd.x1fold-edge-fs",
+  name = "dubhagen.x1fold-edge-fs",
   match = { tag = "x1fold-clamshell-fs" },
   decorate = false,
   rounding = 0,
@@ -33,7 +33,7 @@ hl.window_rule({
   no_anim = true,
 })
 
-local x1fold = os.getenv("HOME") .. "/.config/omarchy/plugins/mattd.x1fold/bin/x1fold"
+local x1fold = os.getenv("HOME") .. "/.config/omarchy/plugins/dubhagen.x1fold/bin/x1fold"
 local x1fold_placing_lock = (os.getenv("HOME") or "") .. "/.local/state/omarchy/x1fold/fs-placing.lock"
 
 local function x1fold_placing()

@@ -36,14 +36,14 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-PLUGIN_ID = "mattd.x1fold"
+PLUGIN_ID = "dubhagen.x1fold"
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 STATE_DIR = HOME / ".local" / "state" / "omarchy" / "x1fold"
 STATE_PATH = STATE_DIR / "state.json"
 STATE_LOCK = STATE_DIR / "state.lock"
 MONITORS_LUA = Path(os.environ.get("OMARCHY_MONITORS_LUA", HOME / ".config" / "hypr" / "monitors.lua"))
-BEGIN_MARK = "-- mattd.x1fold: begin"
-END_MARK = "-- mattd.x1fold: end"
+BEGIN_MARK = "-- dubhagen.x1fold: begin"
+END_MARK = "-- dubhagen.x1fold: end"
 ARRANGE_BEGIN = "-- omarchy-monitor-arrange: begin"
 INTERNAL_RE = re.compile(r"^(eDP|LVDS|DSI)-")
 FALLBACK_DIGITIZERS = (
@@ -358,7 +358,7 @@ def eval_screensaver_rule(state: dict, mon: dict, bottom: int) -> None:
         extra = 'float = true, fullscreen = true, animation = "slide"'
     lua = (
         "hl.window_rule({ "
-        'name = "mattd.x1fold-screensaver", '
+        'name = "dubhagen.x1fold-screensaver", '
         'match = { class = "org.omarchy.screensaver" }, '
         "decorate = false, rounding = 0, no_shadow = true, border_size = 0, "
         "no_max_size = true, "
@@ -2170,7 +2170,7 @@ def eval_osk_layer_rules() -> None:
     above it. order 10 only sorts the strip among other Top surfaces.
     """
     eval_lua(
-        'hl.layer_rule({ match = { namespace = "^mattd-x1fold-osk-mask$" }, '
+        'hl.layer_rule({ match = { namespace = "^dubhagen-x1fold-osk-mask$" }, '
         'no_anim = true, animation = "none", order = 10 })\n'
         'hl.layer_rule({ match = { namespace = "^wvkbd$" }, no_anim = true, order = 0 })'
     )

@@ -6,7 +6,7 @@ import qs.Commons
 
 BarWidget {
   id: root
-  moduleName: "mattd.x1fold"
+  moduleName: "dubhagen.x1fold"
 
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string script: pluginDir + "/bin/x1fold"
@@ -30,7 +30,7 @@ BarWidget {
     var svc = null
     try {
       if (root.bar && root.bar.shell && typeof root.bar.shell.serviceFor === "function")
-        svc = root.bar.shell.serviceFor("mattd.x1fold")
+        svc = root.bar.shell.serviceFor("dubhagen.x1fold")
     } catch (e) {}
     if (!svc)
       return

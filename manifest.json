@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "mattd.x1fold",
+  "id": "dubhagen.x1fold",
   "name": "X1 Fold",
   "version": "1.0.0",
-  "author": "mattd",
+  "author": "dubhagen",
   "description": "Orientation and clamshell (keyboard-half) mode for the ThinkPad X1 Fold 16",
   "kinds": ["service", "bar-widget"],
   "keepLoaded": true,

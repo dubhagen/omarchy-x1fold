@@ -15,7 +15,7 @@ Built with help from Grok. Your mileage may vary: this is one ThinkPad X1 Fold 1
 **Clamshell** is the folded posture. Fold the panel, set the Bluetooth keyboard on the lower half, and work on the top half only. The plugin:
 
 - Reserves that lower region so tiled windows cannot sit under the keys
-- Insets Omarchy Quickshell overlays to the visible area while clamshell or the on-screen keyboard is up, so scrims, clicks, and cards stay above that band. Omarchy 4.0.3 sandboxes the `shell` object injected into third-party plugins, so this cannot walk host overlay PanelWindows. `setup.sh` therefore clones `omarchy.menu`, `omarchy.image-picker`, `omarchy.osd`, `omarchy.clipboard`, and `omarchy.emojis` (as `mattd.*`) and top-anchors those surfaces from `state.json`. The theme wallpaper is cropped with a click-through Bottom layer (`mattd-x1fold-wallpaper`) sized to the visible half, because Hyprland keeps the stock Background layer full-output. Other plugins can read `omarchy-shell mattd.x1fold usableArea`. With clamshell off and the keyboard hidden, overlays stay full screen.
+- Insets Omarchy Quickshell overlays to the visible area while clamshell or the on-screen keyboard is up, so scrims, clicks, and cards stay above that band. Omarchy 4.5 still sizes those overlays to the full Quickshell screen, and there is no usable-area hint that would make the stock copies do it. `setup.sh` therefore keeps publisher-owned clones `dubhagen.menu`, `dubhagen.image-picker`, `dubhagen.osd`, `dubhagen.clipboard`, and `dubhagen.emojis`. Each run copies the current built-in and applies only the clamshell inset from `state.json`. The theme wallpaper is cropped with a click-through Bottom layer (`dubhagen-x1fold-wallpaper`) sized to the visible half, because Hyprland keeps the stock Background layer full-output. Other plugins can read `omarchy-shell dubhagen.x1fold usableArea`. With clamshell off and the keyboard hidden, overlays stay full screen.
 - In clamshell only, maps the screensaver as a borderless float on the visible half (a named Hyprland rule, so it never flashes covering-fullscreen). TTE then measures the visible pty. Dismiss unparks the bar first so tiled windows reflow behind the saver instead of jumping after it closes. Outside clamshell it is Omarchy’s stock covering fullscreen.
 - While clamshell or the on-screen keyboard is up, Super+F, YouTube, and other fullscreen clients use that same viewport float (cinema mode to the app, no compositor gaps). The bar parks for that duration on the fullscreen workspace only. Exit tiles the window back into its original split, restores the focus border, and brings the bar back. YouTube’s own fullscreen (the player’s F key or fullscreen button) is the same float, and leaving that fullscreen returns the window to the tiled desktop. Super+F still toggles cinema for the window itself and stays up until Super+F again, unless the app then leaves a fullscreen it requested. Outside clamshell and with the on-screen keyboard hidden, Super+F is stock covering fullscreen. While any window on the workspace that is on screen is playing, the plugin holds a Wayland idle inhibitor, so the screensaver and lock wait even when the window is tiled or unfocused. Playing means MPRIS status Playing, or an uncorked audio stream from that window when MPRIS does not say the player is paused or stopped. Pausing, stopping, or switching to a workspace that is not playing drops the inhibitor and lets the normal idle timeout run.
 - Paints the covered half true black (`#000000`) on an Overlay layer so those OLED pixels turn off
@@ -53,7 +53,7 @@ The trigger has to select the event node. A match on the pen’s name hits the p
 
 Omarchy’s idle-wake path re-enables the internal panel *without* a transform, and this OLED is natively portrait. The plugin watches screensaver dismiss, DPMS restore, and `monitoradded` / `configreloaded`, then puts the saved orientation back.
 
-**Dual battery** is a separate bar widget. The Fold has two cells (~50 Wh + ~14.6 Wh). Stock Omarchy only prints BAT0. `setup.sh` clones `omarchy.power` to `mattd.power` and overlays pack totals (size, percentage, rate, time). That clone is not part of `mattd.x1fold`; uninstalling the fold plugin leaves it installed.
+**Dual battery** is a separate bar widget. The Fold has two cells (~50 Wh + ~14.6 Wh). The bar icon already follows UPower’s combined DisplayDevice. The open panel’s size, rate, and time come from `omarchy-battery-status`, which stops at the first cell. `setup.sh` keeps a publisher-owned `dubhagen.power` clone, refreshed from the current built-in on every run, and changes one command to `x1fold-battery-status` (`~/.local/bin/x1fold-battery-status`). With a single cell that command is the stock tool. That clone is not part of `dubhagen.x1fold`; uninstalling the fold plugin leaves it installed.
 
 ## Requirements
 
@@ -76,12 +76,14 @@ cd ~/Projects/omarchy/x1fold-plugin
 
 `setup.sh` will:
 
-1. Symlink this checkout to `~/.config/omarchy/plugins/mattd.x1fold`
+1. Symlink this checkout to `~/.config/omarchy/plugins/dubhagen.x1fold`
 2. Put `x1fold` on your `PATH` (`~/.local/bin/x1fold`)
 3. Enable the bar widget (right section)
 4. Build `wvkbd-deskintl` into `~/.local/bin` and install keybindings, layer rules, TrackPoint-keyboard input, and Omarchy menu entries
-5. Clone `omarchy.power` to `mattd.power` (still a separate bar widget) and overlay dual-battery pack totals
-6. Clone the Omarchy menu, image picker, OSD, clipboard, and emoji overlays and inset them in clamshell. The menu clone fills Apps from desktop entries when the shell proxy returns no usable rows
+5. Refresh `dubhagen.power` from `omarchy.power` and point its battery command at `x1fold-battery-status`
+6. Refresh `dubhagen.menu`, `dubhagen.image-picker`, `dubhagen.osd`, `dubhagen.clipboard`, and `dubhagen.emojis` from the current built-ins and inset them in clamshell. The menu clone fills Apps from desktop entries when the shell proxy returns no usable rows
+
+Those ids are the publisher’s. The install does not take a clone in your own user namespace, and it does not run `omarchy plugin clone` (that command always names the copy after the unix user). The next `./setup.sh` copies upstream again and reapplies only that patch, so an edit inside `~/.config/omarchy/plugins/dubhagen.*` does not survive. A clone you made yourself, without this installer’s marker, is left in place.
 7. Restart the Omarchy shell
 
 To also install the Bluetooth-keyboard-at-LUKS initramfs hook, the libinput quirk so disable-while-typing applies to the folio keyboard on Bluetooth and USB-C, and the Active Pen udev rule (needs `sudo` in a terminal):
@@ -103,7 +105,7 @@ Uninstall desktop integration (does not delete this checkout):
 ./setup.sh --uninstall
 ```
 
-That leaves `mattd.power` and the overlay clones (`mattd.menu`, `mattd.image-picker`, `mattd.osd`, `mattd.clipboard`, `mattd.emojis`) installed, the same way a dual-battery overlay survives. Without a clamshell `state.json` the insets stay inactive. The menu clone still lists Apps from desktop entries, because the shell proxy drops those objects even on the full panel.
+That leaves `dubhagen.power`, the overlay clones (`dubhagen.menu`, `dubhagen.image-picker`, `dubhagen.osd`, `dubhagen.clipboard`, `dubhagen.emojis`), and `~/.local/bin/x1fold-battery-status` installed. The power panel still calls that command. Without a clamshell `state.json` the insets stay inactive. The menu clone still lists Apps from desktop entries, because the shell proxy drops those objects even on the full panel.
 
 ## Usage
 
@@ -171,7 +173,7 @@ The root filesystem is encrypted. After pairing the ThinkPad keyboard in the run
 
 ```bash
 ./setup.sh --boot
-# or: ~/.config/omarchy/plugins/mattd.x1fold/bin/x1fold-install-boot-keyboard
+# or: ~/.config/omarchy/plugins/dubhagen.x1fold/bin/x1fold-install-boot-keyboard
 ```
 
 That copies a `bluetoothkbd` mkinitcpio hook (before `encrypt`), includes `/var/lib/bluetooth` pairing data, the Intel CNVi firmware this adapter loads at runtime (`intel/ibt-0040-0041.sfi`), the `uhid` module BLE HID needs, enables `AutoEnable` in `bluetoothd`, and rebuilds the initramfs.
@@ -194,13 +196,13 @@ Omarchy loads user plugins from `~/.config/omarchy/plugins/<id>/`. This repo *is
 
 ```
 x1fold-plugin/
-├── manifest.json          Omarchy plugin id mattd.x1fold
+├── manifest.json          Omarchy plugin id dubhagen.x1fold
 ├── Service.qml            Daemon, IPC, OLED mask layer
 ├── BarWidget.qml          Bar icon
 ├── Panel.qml              Settings panel
 ├── bin/x1fold             Posture CLI (Python)
 ├── initcpio/              bluetoothkbd hook for LUKS
-├── contrib/               Hyprland + menu snippets and overlay clones setup.sh installs
+├── contrib/               Hyprland + menu snippets, the clamshell patch, and the pack battery command
 ├── setup.sh               Install / uninstall (builds the on-screen keyboard)
 ├── screenshots/panel.png
 └── LICENSE                MIT
@@ -216,7 +218,7 @@ Runtime state (not in git) lives at `~/.local/state/omarchy/x1fold/state.json`. 
 omarchy restart shell
 ```
 
-`setup.sh` points `~/.config/omarchy/plugins/mattd.x1fold` at this directory, so the checkout *is* the live plugin.
+`setup.sh` points `~/.config/omarchy/plugins/dubhagen.x1fold` at this directory, so the checkout *is* the live plugin.
 
 ## Credits
 

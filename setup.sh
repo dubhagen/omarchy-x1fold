@@ -2,16 +2,17 @@
 # Install the X1 Fold Omarchy plugin from this checkout.
 set -euo pipefail
 
-PLUGIN_ID="mattd.x1fold"
-POWER_ID="mattd.power"
+PUBLISHER="dubhagen"
+PLUGIN_ID="${PUBLISHER}.x1fold"
+PACK_STATUS_BIN="${HOME}/.local/bin/x1fold-battery-status"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIVE="${HOME}/.config/omarchy/plugins/${PLUGIN_ID}"
-POWER_LIVE="${HOME}/.config/omarchy/plugins/${POWER_ID}"
+PLUGINS_DIR="${HOME}/.config/omarchy/plugins"
 BIN_LINK="${HOME}/.local/bin/x1fold"
 HYPR="${HOME}/.config/hypr"
 MENU="${HOME}/.config/omarchy/extensions/omarchy-menu.jsonc"
-MARK_BEGIN="-- mattd.x1fold: begin"
-MARK_END="-- mattd.x1fold: end"
+MARK_BEGIN="-- dubhagen.x1fold: begin"
+MARK_END="-- dubhagen.x1fold: end"
 BOOT=0
 UNINSTALL=0
 RESTART_SHELL=1
@@ -29,15 +30,18 @@ Usage: ./setup.sh [options]
                       folio-keyboard disable-while-typing, and the Active
                       Pen click rule (needs sudo in a terminal)
   --uninstall         Remove the plugin symlink, keybindings, menu entries,
-                      and CLI link. Does not delete this checkout.
+                      and CLI link. Does not delete this checkout, the
+                      dubhagen.* overlay and power clones, or
+                      ~/.local/bin/x1fold-battery-status.
   --no-shell-restart  Skip \`omarchy restart shell\`
   -h, --help          Show this help
 
 Default install:
   symlink this repo → ~/.config/omarchy/plugins/${PLUGIN_ID}
   enable the bar widget, keybindings, on-screen keyboard, layer rules, menu
-  clone Omarchy overlays so clamshell insets the launcher, background
-  switcher, OSD, clipboard, and emoji picker
+  refresh dubhagen.* clones of the stock overlays and power widget, then
+  apply the clamshell inset and the dual-battery command. These ids are the
+  publisher's, so the install does not take a clone in your own user namespace.
 EOF
 }
 
@@ -75,10 +79,10 @@ text = path.read_text() if path.exists() else ""
 
 # Drop an older unmarked copy of the same snippet if we are about to wrap it.
 for needle in (
-    'local x1fold = os.getenv("HOME") .. "/.config/omarchy/plugins/mattd.x1fold/bin/x1fold"',
+    'local x1fold = os.getenv("HOME") .. "/.config/omarchy/plugins/dubhagen.x1fold/bin/x1fold"',
     'o.launch_on_start("squeekboard")',
     'o.launch_on_start("env -u GDK_SCALE -u GDK_DPI_SCALE squeekboard")',
-    'namespace = "mattd-x1fold-mask"',
+    'namespace = "dubhagen-x1fold-mask"',
     'hl.env("SQUEEKBOARD_FORCE", "1")',
 ):
     if begin in text:
@@ -97,7 +101,7 @@ for needle in (
                 "x1fold" in lines[stop]
                 or "squeekboard" in lines[stop]
                 or "SQUEEKBOARD_FORCE" in lines[stop]
-                or "mattd-x1fold-mask" in lines[stop]
+                or "dubhagen-x1fold-mask" in lines[stop]
             ):
                 stop += 1
             drop.append((start, stop))
@@ -195,6 +199,15 @@ PY
 
 install_plugin_link() {
   mkdir -p "$(dirname "$LIVE")" "${HOME}/.local/bin"
+  local old
+  for old in "${HOME}/.config/omarchy/plugins/"*; do
+    [[ -L $old ]] || continue
+    [[ $(basename "$old") == "$PLUGIN_ID" ]] && continue
+    if [[ $(readlink -f "$old") == $(readlink -f "$REPO") ]]; then
+      log "removing previous plugin link $old"
+      rm -f "$old"
+    fi
+  done
   if [[ -L $LIVE ]]; then
     local current
     current="$(readlink -f "$LIVE")"
@@ -239,54 +252,181 @@ raise SystemExit(0 if any(p.get('id')=='${PLUGIN_ID}' and p.get('enabled') for p
   omarchy plugin enable "$PLUGIN_ID" --section right
 }
 
-install_power_overlay() {
-  # Dual-battery totals live in a cloned omarchy.power widget, not in
-  # mattd.x1fold. setup.sh clones it once, then overlays our files.
-  if [[ ! -d $POWER_LIVE ]]; then
-    log "cloning omarchy.power → ${POWER_ID}"
-    omarchy plugin clone omarchy.power
-  fi
-  [[ -d $POWER_LIVE ]] || die "failed to create ${POWER_LIVE}"
-  mkdir -p "$POWER_LIVE/bin"
-  install -m 644 "$REPO/contrib/power/Panel.qml" "$POWER_LIVE/Panel.qml"
-  install -m 644 "$REPO/contrib/power/Model.js" "$POWER_LIVE/Model.js"
-  install -m 755 "$REPO/contrib/power/bin/battery-status" "$POWER_LIVE/bin/battery-status"
-  log "dual-battery overlay installed on ${POWER_ID} (separate from ${PLUGIN_ID})"
-}
-
 clone_id_for() {
+  # Publisher ids, never $USER.*. `omarchy plugin clone` always names the
+  # copy after the unix user, which would take over that person's own slot.
   local source_id="$1"
-  printf '%s.%s' "${USER:-$(id -un)}" "${source_id#omarchy.}"
+  printf '%s.%s' "$PUBLISHER" "${source_id#omarchy.}"
 }
 
-install_overlay_clone() {
-  # Omarchy 4.0.3 sandboxes third-party overlay discovery. Clone the
-  # first-party overlay and inset its own PanelWindow from x1fold state.
-  # Menu.qml also lists Apps from desktop entries when the shell's
-  # app-library proxy returns rows with no entry objects.
-  local source_id="$1" entry="$2"
+refresh_owned_clone() {
+  # Replace the publisher clone with a fresh copy of the current built-in.
+  # These directories belong to this installer. The next setup.sh overwrites
+  # any local edit inside them. Prints the installed path on stdout.
+  local source_id="$1"
+  local clone_id clone_dir source_dir source_manifest source_name stage info
+  clone_id="$(clone_id_for "$source_id")"
+  clone_dir="${PLUGINS_DIR}/${clone_id}"
+  info=$(omarchy-plugin-catalog | jq -r --arg id "$source_id" '
+    .[] | select(.firstParty and .id == $id)
+    | [.sourceDir, .manifestPath, (.name // .id)] | @tsv
+  ') || die "could not read the plugin catalog for ${source_id}"
+  [[ -n $info ]] || die "unknown built-in plugin: ${source_id}"
+  IFS=$'\t' read -r source_dir source_manifest source_name <<<"$info"
+  [[ ${source_manifest##*/} == manifest.json ]] || die "${source_id} manifest is not manifest.json (${source_manifest})"
+  [[ -d $source_dir ]] || die "missing source for ${source_id}: ${source_dir}"
+  mkdir -p "$PLUGINS_DIR"
+  # A leading dot keeps the staging dir out of the plugin scanner.
+  stage=$(mktemp -d "${PLUGINS_DIR}/.x1fold-clone.XXXXXX")
+  if ! cp -aL "$source_dir/." "$stage/"; then
+    rm -rf "$stage"
+    die "failed to copy ${source_id}"
+  fi
+  if ! jq \
+    --arg id "$clone_id" \
+    --arg name "$source_name" \
+    --arg sourceId "$source_id" '
+      .id = $id |
+      .name = $name |
+      if (.barWidget | type) == "object" then
+        .barWidget.displayName = $name
+      else
+        .
+      end |
+      .omarchy = (
+        (if (.omarchy | type) == "object" then .omarchy else {} end) +
+        { clonedFrom: $sourceId }
+      ) |
+      del(.omarchy.clonePaths)
+    ' "$stage/manifest.json" >"$stage/manifest.json.tmp"; then
+    rm -rf "$stage"
+    die "failed to rewrite the manifest for ${clone_id}"
+  fi
+  mv "$stage/manifest.json.tmp" "$stage/manifest.json"
+  printf '%s\n' "$source_id" >"$stage/.x1fold-clone"
+  rm -rf "$clone_dir"
+  if ! mv "$stage" "$clone_dir"; then
+    rm -rf "$stage"
+    die "failed to install ${clone_dir}"
+  fi
+  printf '%s\n' "$clone_dir"
+}
+
+wait_for_plugin() {
+  local clone_id="$1"
+  local pass attempt discovered
+  discovered=0
+  for (( pass = 0; pass < 2; pass++ )); do
+    omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
+    for (( attempt = 0; attempt < 40; attempt++ )); do
+      if omarchy plugin list --json | jq -e --arg id "$clone_id" 'any(.[]; .id == $id)' >/dev/null; then
+        discovered=1
+        break
+      fi
+      sleep 0.05
+    done
+    (( discovered )) && break
+  done
+  (( discovered )) || die "cloned plugin ${clone_id} was not discovered"
+}
+
+plugin_is_enabled() {
+  local id="$1"
+  omarchy plugin list --json | jq -e --arg id "$id" 'any(.[]; .id == $id and .enabled)' >/dev/null
+}
+
+retire_foreign_owned_clone() {
+  # Drop an older copy this installer made under some other id. A personal
+  # clone of the same built-in has no ClamshellBounds, battery wrapper, or
+  # .x1fold-clone marker, and is left alone. Disable before removing so the
+  # shell puts the built-in back in the same bar slot.
+  local source_id="$1" keep_id="$2"
+  local dir manifest id
+  for dir in "$PLUGINS_DIR"/*; do
+    [[ -d $dir && ! -L $dir ]] || continue
+    manifest="$dir/manifest.json"
+    [[ -f $manifest ]] || continue
+    id=$(jq -r --arg src "$source_id" '
+      if .omarchy.clonedFrom == $src then .id else empty end
+    ' "$manifest")
+    [[ -n $id && $id != "$keep_id" ]] || continue
+    [[ $(basename "$dir") == "$id" ]] || continue
+    if [[ ! -f $dir/ClamshellBounds.qml && ! -f $dir/bin/battery-status && ! -f $dir/.x1fold-clone ]]; then
+      continue
+    fi
+    if plugin_is_enabled "$id"; then
+      log "disabling installer-owned clone ${id}"
+      omarchy plugin disable "$id"
+    fi
+    log "removing installer-owned clone ${dir}"
+    rm -rf "$dir"
+  done
+}
+
+patch_power_command() {
+  python3 - "$1" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+needle = 'command: ["omarchy-battery-status", "--shell"]'
+repl = 'command: ["x1fold-battery-status", "--shell"]'
+if needle in text:
+    if text.count(needle) != 1:
+        sys.exit("expected exactly one stock battery command in " + str(path))
+    path.write_text(text.replace(needle, repl, 1))
+elif repl not in text:
+    sys.exit("battery command not found in " + str(path))
+PY
+}
+
+install_pack_status() {
+  mkdir -p "$(dirname "$PACK_STATUS_BIN")"
+  install -m 755 "$REPO/contrib/power/bin/battery-status" "$PACK_STATUS_BIN"
+  log "pack battery status → ${PACK_STATUS_BIN}"
+}
+
+install_owned_clone() {
+  local source_id="$1" kind="$2" entry="${3:-}"
   local clone_id clone_dir
   clone_id="$(clone_id_for "$source_id")"
-  clone_dir="${HOME}/.config/omarchy/plugins/${clone_id}"
-  if [[ ! -d $clone_dir ]]; then
-    log "cloning ${source_id} → ${clone_id}"
-    omarchy plugin clone "$source_id"
-  fi
-  [[ -d $clone_dir ]] || die "failed to create ${clone_dir}"
-  python3 "$REPO/contrib/clamshell/patch.py" apply "$clone_dir" "$entry"
-  if [[ $entry == Menu.qml ]]; then
-    log "clamshell inset and apps fallback on ${clone_id} (${entry})"
+  log "refreshing ${clone_id} from ${source_id}"
+  clone_dir=$(refresh_owned_clone "$source_id")
+  if [[ $kind == overlay ]]; then
+    python3 "$REPO/contrib/clamshell/patch.py" apply "$clone_dir" "$entry"
+    if [[ $entry == Menu.qml ]]; then
+      log "clamshell inset and apps fallback on ${clone_id} (${entry})"
+    else
+      log "clamshell inset on ${clone_id} (${entry})"
+    fi
+  elif [[ $kind == power ]]; then
+    patch_power_command "$clone_dir/Panel.qml"
+    log "dual-battery command on ${clone_id}"
   else
-    log "clamshell inset on ${clone_id} (${entry})"
+    die "unknown clone kind ${kind}"
+  fi
+  wait_for_plugin "$clone_id"
+  retire_foreign_owned_clone "$source_id" "$clone_id"
+  if plugin_is_enabled "$clone_id"; then
+    log "${clone_id} already enabled"
+  else
+    log "enabling ${clone_id}"
+    omarchy plugin enable "$clone_id"
   fi
 }
 
-install_overlay_clones() {
-  install_overlay_clone omarchy.menu Menu.qml
-  install_overlay_clone omarchy.image-picker ImagePicker.qml
-  install_overlay_clone omarchy.osd Osd.qml
-  install_overlay_clone omarchy.clipboard Clipboard.qml
-  install_overlay_clone omarchy.emojis Emojis.qml
+install_publisher_clones() {
+  # Refresh every run, then patch only the delta. Enabling the new clone
+  # happens after the previous installer-owned clone is disabled, so the
+  # built-in returns to the same slot and the new id takes that slot.
+  command -v jq >/dev/null || die "jq is required"
+  command -v omarchy-plugin-catalog >/dev/null || die "omarchy-plugin-catalog is required"
+  install_pack_status
+  install_owned_clone omarchy.menu overlay Menu.qml
+  install_owned_clone omarchy.image-picker overlay ImagePicker.qml
+  install_owned_clone omarchy.osd overlay Osd.qml
+  install_owned_clone omarchy.clipboard overlay Clipboard.qml
+  install_owned_clone omarchy.emojis overlay Emojis.qml
+  install_owned_clone omarchy.power power
 }
 
 install_wvkbd() {
@@ -341,7 +481,7 @@ import pathlib, re, sys
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()
 updated = re.sub(
-    r"\n?/\* mattd\.x1fold squeekboard \*/.*?/\* mattd\.x1fold squeekboard end \*/\n?",
+    r"\n?/\* [A-Za-z0-9.-]+\.x1fold squeekboard \*/.*?/\* [A-Za-z0-9.-]+\.x1fold squeekboard end \*/\n?",
     "\n",
     text,
     count=1,
@@ -425,6 +565,7 @@ do_uninstall() {
   if (( RESTART_SHELL )) && command -v omarchy >/dev/null; then
     omarchy restart shell
   fi
+  log "left the dubhagen overlay and power clones, and ${PACK_STATUS_BIN}, in place"
   log "checkout left at $REPO"
 }
 
@@ -441,8 +582,7 @@ install_plugin_link
 install_wvkbd
 install_desktop
 enable_plugin
-install_power_overlay
-install_overlay_clones
+install_publisher_clones
 
 if (( BOOT )); then
   install_boot

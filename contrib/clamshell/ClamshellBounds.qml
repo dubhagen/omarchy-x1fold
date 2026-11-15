@@ -3,8 +3,8 @@ import Quickshell
 import Quickshell.Io
 
 // Shared by cloned Omarchy overlays (menu, image picker, OSD, …).
-// Reads x1fold state.json so those PanelWindows can inset to the visible
-// OLED half without walking the sandboxed host shell.
+// Reads x1fold state.json so those surfaces can inset to the visible OLED
+// half without walking the sandboxed host shell.
 Item {
   id: root
 

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Patch a cloned Omarchy overlay.
 
-Every overlay gets ClamshellBounds and a PanelWindow inset. Menu.qml also
-gets an Apps-list fallback: the shell's plugin app-library proxy drops
-desktop-entry objects, so a stock merge leaves Apps empty.
+Every overlay gets ClamshellBounds. Omarchy 4.5 overlays are OverlayWindow,
+which stays blank until its height matches the screen, so the inset is a
+ClamshellOverlay with insetBottom. Older PanelWindow clones keep the fill
+anchors they already have. Menu.qml also gets an Apps-list fallback: the
+shell's plugin app-library proxy drops desktop-entry objects, so a stock
+merge leaves Apps empty.
 """
 
 from __future__ import annotations
@@ -12,18 +15,24 @@ import shutil
 import sys
 from pathlib import Path
 
-BOUNDS_MARK_BEGIN = "  // mattd.x1fold: clamshell-bounds"
-BOUNDS_MARK_END = "  // mattd.x1fold: clamshell-bounds end"
-ANCHOR_MARK_BEGIN = "    // mattd.x1fold: clamshell-anchors"
-ANCHOR_MARK_END = "    // mattd.x1fold: clamshell-anchors end"
+BOUNDS_MARK_BEGIN = "  // dubhagen.x1fold: clamshell-bounds"
+BOUNDS_MARK_END = "  // dubhagen.x1fold: clamshell-bounds end"
+ANCHOR_MARK_BEGIN = "    // dubhagen.x1fold: clamshell-anchors"
+ANCHOR_MARK_END = "    // dubhagen.x1fold: clamshell-anchors end"
+OVERLAY_MARK_BEGIN = "    // dubhagen.x1fold: clamshell-overlay"
+OVERLAY_MARK_END = "    // dubhagen.x1fold: clamshell-overlay end"
+OVERLAY_BLOCK = """    // dubhagen.x1fold: clamshell-overlay
+    insetBottom: x1foldBounds.activeOn(screen) ? x1foldBounds.insetFor(screen) : 0
+    // dubhagen.x1fold: clamshell-overlay end
+"""
 STOCK_ANCHORS = "    anchors { top: true; bottom: true; left: true; right: true }"
-CLAMSHELL_ANCHORS = """    // mattd.x1fold: clamshell-anchors
+CLAMSHELL_ANCHORS = """    // dubhagen.x1fold: clamshell-anchors
     anchors { top: true; left: true; right: true; bottom: !x1foldBounds.activeOn(screen) }
     implicitHeight: x1foldBounds.activeOn(screen) ? x1foldBounds.usableHeightFor(screen) : 0
-    // mattd.x1fold: clamshell-anchors end"""
-BOUNDS_BLOCK = """  // mattd.x1fold: clamshell-bounds
+    // dubhagen.x1fold: clamshell-anchors end"""
+BOUNDS_BLOCK = """  // dubhagen.x1fold: clamshell-bounds
   ClamshellBounds { id: x1foldBounds }
-  // mattd.x1fold: clamshell-bounds end
+  // dubhagen.x1fold: clamshell-bounds end
 """
 MENU_APPS_MARK = "A cloned menu only sees AppLibrary through the plugin proxy."
 HIDDEN_BLOCK = """  // Ids from the stock launcher hide list. The cloned menu reads desktop
@@ -62,8 +71,10 @@ STOCK_APPS = """  // The apps provider is QML-native: rows come from the shared 
         action: "",
         provider: "",
         aliases: aliases,
+        searchTerms: [],
         when: "",
         checked: "",
+        disabled: "",
         order: 0
       })
     }
@@ -174,8 +185,10 @@ NEW_APPS = """  // The apps provider is QML-native: rows come from the shared Ap
         action: "",
         provider: "",
         aliases: aliases,
+        searchTerms: [],
         when: "",
         checked: "",
+        disabled: "",
         order: 0
       })
     }
@@ -221,10 +234,17 @@ def insert_bounds(text: str) -> str:
 
 
 def replace_anchors(text: str) -> str:
-    if ANCHOR_MARK_BEGIN in text:
+    if ANCHOR_MARK_BEGIN in text or OVERLAY_MARK_BEGIN in text or "ClamshellOverlay {" in text:
         return text
+    overlay = "  OverlayWindow {"
+    if overlay in text:
+        return text.replace(
+            overlay,
+            "  ClamshellOverlay {\n" + OVERLAY_BLOCK.rstrip("\n"),
+            1,
+        )
     if STOCK_ANCHORS not in text:
-        fail("could not find stock PanelWindow fill anchors")
+        fail("could not find OverlayWindow or stock PanelWindow fill anchors")
     return text.replace(STOCK_ANCHORS, CLAMSHELL_ANCHORS, 1)
 
 
@@ -245,7 +265,6 @@ def unpatch_menu_colors(text: str) -> str:
 
 
 def patch_menu_apps(text: str) -> str:
-    text = patch_menu_colors(text)
     if MENU_APPS_MARK in text:
         return text
     revision = "  property int providerRevision: 0\n\n"
@@ -272,10 +291,19 @@ def unpatch_menu_apps(text: str) -> str:
     if WATCH_BLOCK not in text:
         fail("menu apps fallback is present but the desktop-entry watcher does not match; refusing to revert")
     text = text.replace(WATCH_BLOCK, "", 1)
-    return unpatch_menu_colors(text)
+    if "Color.menu" in text and "import qs.Commons as Commons\n" not in text:
+        text = unpatch_menu_colors(text)
+    return text
 
 
 def unpatch(text: str, entry_name: str = "") -> str:
+    if OVERLAY_MARK_BEGIN in text and OVERLAY_MARK_END in text:
+        start = text.index(OVERLAY_MARK_BEGIN)
+        end = text.index(OVERLAY_MARK_END) + len(OVERLAY_MARK_END)
+        if end < len(text) and text[end] == "\n":
+            end += 1
+        text = text[:start] + text[end:]
+        text = text.replace("  ClamshellOverlay {", "  OverlayWindow {", 1)
     if ANCHOR_MARK_BEGIN in text and ANCHOR_MARK_END in text:
         start = text.index(ANCHOR_MARK_BEGIN)
         end = text.index(ANCHOR_MARK_END) + len(ANCHOR_MARK_END)
@@ -301,8 +329,10 @@ def main(argv: list[str]) -> int:
     action, clone_dir, entry_name = argv[1], Path(argv[2]), argv[3]
     here = Path(__file__).resolve().parent
     bounds_src = here / "ClamshellBounds.qml"
+    overlay_src = here / "ClamshellOverlay.qml"
     entry = clone_dir / entry_name
     bounds_dst = clone_dir / "ClamshellBounds.qml"
+    overlay_dst = clone_dir / "ClamshellOverlay.qml"
     if not clone_dir.is_dir():
         fail(f"clone directory missing: {clone_dir}")
     if not entry.is_file():
@@ -312,12 +342,18 @@ def main(argv: list[str]) -> int:
         text = unpatch(entry.read_text(), entry_name)
         entry.write_text(text)
         bounds_dst.unlink(missing_ok=True)
+        overlay_dst.unlink(missing_ok=True)
         return 0
 
     if not bounds_src.is_file():
         fail(f"missing {bounds_src}")
+    if not overlay_src.is_file():
+        fail(f"missing {overlay_src}")
     shutil.copy2(bounds_src, bounds_dst)
-    text = replace_anchors(insert_bounds(entry.read_text()))
+    text = insert_bounds(entry.read_text())
+    if "  OverlayWindow {" in text or "  ClamshellOverlay {" in text:
+        shutil.copy2(overlay_src, overlay_dst)
+    text = replace_anchors(text)
     if entry_name == "Menu.qml":
         text = patch_menu_apps(text)
     entry.write_text(text)

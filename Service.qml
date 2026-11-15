@@ -337,7 +337,7 @@ Item {
 
   function skipOverlay(item) {
     var ns = root.layerNamespace(item)
-    if (ns === "mattd-x1fold-mask" || ns === "mattd-x1fold-osk-mask" || ns === "mattd-x1fold-ss-dismiss" || ns === "mattd-x1fold-wallpaper" || ns === "omarchy-bar")
+    if (ns === "dubhagen-x1fold-mask" || ns === "dubhagen-x1fold-osk-mask" || ns === "dubhagen-x1fold-ss-dismiss" || ns === "dubhagen-x1fold-wallpaper" || ns === "omarchy-bar")
       return true
     if (ns === "wvkbd")
       return true
@@ -1049,7 +1049,7 @@ Item {
   }
 
   IpcHandler {
-    target: "mattd.x1fold"
+    target: "dubhagen.x1fold"
 
     function status(): string {
       return JSON.stringify({
@@ -1126,7 +1126,7 @@ Item {
       anchors { top: true; left: true; right: true }
       implicitHeight: Math.max(1, modelData.height - root.reservedLogical)
       color: "transparent"
-      WlrLayershell.namespace: "mattd-x1fold-wallpaper"
+      WlrLayershell.namespace: "dubhagen-x1fold-wallpaper"
       // Bottom sits above the stock wallpaper and below windows/bar/menus.
       // Empty mask keeps the layer click-through so the desktop still works.
       WlrLayershell.layer: WlrLayer.Bottom
@@ -1156,7 +1156,7 @@ Item {
       anchors { left: true; right: true; bottom: true }
       implicitHeight: Math.max(0, Math.round(modelData.height * root.coverRatio) + root.overlapPx)
       color: "#000000"
-      WlrLayershell.namespace: "mattd-x1fold-mask"
+      WlrLayershell.namespace: "dubhagen-x1fold-mask"
       WlrLayershell.layer: WlrLayer.Overlay
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
       exclusionMode: ExclusionMode.Ignore
@@ -1181,7 +1181,7 @@ Item {
       margins.bottom: root.coverLogical
       implicitHeight: root.oskLogical
       color: "#000000"
-      WlrLayershell.namespace: "mattd-x1fold-osk-mask"
+      WlrLayershell.namespace: "dubhagen-x1fold-osk-mask"
       // Top is above fullscreen windows and below Overlay. wvkbd is Overlay,
       // so the keys stay above this strip without a same-layer order fight.
       WlrLayershell.layer: WlrLayer.Top
@@ -1202,7 +1202,7 @@ Item {
       visible: root.clamshell && root.ssDismissArmed && String(modelData.name || "").indexOf("eDP") === 0
       anchors { left: true; right: true; top: true; bottom: true }
       color: "#01000000"
-      WlrLayershell.namespace: "mattd-x1fold-ss-dismiss"
+      WlrLayershell.namespace: "dubhagen-x1fold-ss-dismiss"
       WlrLayershell.layer: WlrLayer.Overlay
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
       exclusionMode: ExclusionMode.Ignore

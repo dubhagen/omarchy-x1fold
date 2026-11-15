@@ -6,8 +6,8 @@ import qs.Commons
 
 Panel {
   id: root
-  moduleName: "mattd.x1fold"
-  ipcTarget: "mattd.x1fold"
+  moduleName: "dubhagen.x1fold"
+  ipcTarget: "dubhagen.x1fold"
   manageIpc: false
 
   property var anchorItem: null
@@ -207,6 +207,7 @@ Panel {
           fontFamily: root.fontFamily
           iconComponent: Component {
             Text {
+              textFormat: Text.PlainText
               text: root.statusIcon
               color: root.fg
               font.family: root.fontFamily
@@ -218,6 +219,7 @@ Panel {
             Row {
               spacing: Style.space(10)
               Text {
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.modeDetail
                 color: root.fg
@@ -241,6 +243,7 @@ Panel {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           wrapMode: Text.WordWrap
           text: root.clamshell
@@ -298,6 +301,7 @@ Panel {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           wrapMode: Text.WordWrap
           text: "0 is a clean half. Negative reveals more screen below the fold. Positive adds black reserved space above the keyboard."
@@ -312,6 +316,7 @@ Panel {
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             width: Style.space(108)
             text: "Overlap  " + root.overlapPx + " px"
@@ -409,6 +414,7 @@ Panel {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           wrapMode: Text.WordWrap
           text: "Super+R cycle · Super+Shift+R clamshell · Super+Alt+R on-screen keyboard · Super+Alt+Shift+R full panel"
