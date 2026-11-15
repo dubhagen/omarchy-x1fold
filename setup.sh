@@ -19,6 +19,8 @@ RESTART_SHELL=1
 WVKBD_VERSION="0.20"
 WVKBD_BIN="${HOME}/.local/bin/wvkbd-deskintl"
 WVKBD_URL="https://github.com/jjsullivan5196/wvkbd/archive/refs/tags/v${WVKBD_VERSION}.tar.gz"
+# Tag v0.20 is commit 6b41504a0cb58fd1163fa44692398fbd61f8905f.
+WVKBD_SHA256="b5fee580f826190fda94c06267e52e7c09f0fbbec2b02e5d140fe62a10a6c3b0"
 
 usage() {
   cat <<EOF
@@ -454,24 +456,30 @@ install_wvkbd() {
     die "missing pkg-config packages for the on-screen keyboard: ${missing[*]}
 Install: pacman -S --needed base-devel wayland pango cairo libxkbcommon"
   fi
-  local fetch=""
-  if command -v curl >/dev/null; then
-    fetch="curl"
-  elif command -v wget >/dev/null; then
-    fetch="wget"
-  else
-    die "curl or wget is required to fetch wvkbd"
-  fi
-  local work src
+  local curl_path
+  curl_path=$(command -v curl || true)
+  [[ -n $curl_path ]] || die "curl is required to fetch wvkbd"
+  local work archive src
   work="$(mktemp -d)"
+  archive="$work/wvkbd-${WVKBD_VERSION}.tar.gz"
   src="$work/wvkbd-${WVKBD_VERSION}"
   log "building wvkbd-deskintl ${WVKBD_VERSION}"
-  if [[ $fetch == curl ]]; then
-    curl -fsSL "$WVKBD_URL" | tar -xz -C "$work"
-  else
-    wget -qO- "$WVKBD_URL" | tar -xz -C "$work"
+  if ! curl -fsSL -o "$archive" "$WVKBD_URL"; then
+    rm -rf "$work"
+    die "failed to download wvkbd ${WVKBD_VERSION}"
   fi
-  [[ -d $src ]] || die "wvkbd source did not unpack at $src"
+  if ! printf '%s  %s\n' "$WVKBD_SHA256" "$archive" | sha256sum -c -; then
+    rm -rf "$work"
+    die "wvkbd ${WVKBD_VERSION} checksum did not match"
+  fi
+  if ! tar -xzf "$archive" -C "$work"; then
+    rm -rf "$work"
+    die "failed to unpack wvkbd ${WVKBD_VERSION}"
+  fi
+  [[ -d $src ]] || {
+    rm -rf "$work"
+    die "wvkbd source did not unpack at $src"
+  }
   if ! make -C "$src" LAYOUT=deskintl wvkbd-deskintl; then
     rm -rf "$work"
     die "failed to build wvkbd-deskintl"
